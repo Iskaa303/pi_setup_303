@@ -1,0 +1,247 @@
+---
+// §3 — the first run. Once installed, the distance from "new user" to "first
+// aligned commit" is three commands of escalating commitment, then a vertical
+// trace of what the runner does and — crucially for the thesis — where the
+// driver decides. The "you" hanko ticks mark the human moments.
+const COMMANDS = [
+	{ cmd: "/wf", note: "preview every pipeline: what each one chains, shortest to deepest." },
+	{ cmd: "/wf build", note: "inspect the graph before committing to it: 30 stages, three gates, one design review." },
+	{ cmd: "/wf build “describe your change”", note: "run the whole chain. Your brief is the only required input." },
+];
+
+// build's seven acts (30 runtime stages). `you` renders the driver badge —
+// hollow ▢ where ask_user_question reaches you only when the code can't
+// decide, solid ■ at the guaranteed design gate; `gate` renders the act's
+// quality-gate badge.
+const TRACE = [
+	{
+		name: "capture",
+		note: "your brief goes to disk byte-for-byte. No LLM touches it. Research then grounds it in your codebase, asking on ambiguity and confirming with you before it writes. Every gate downstream grades against your exact words.",
+		you: "▢ your answers",
+	},
+	{
+		name: "slice",
+		note: "the brief is cut into independent vertical slices, each small enough for one design pass. You confirm the cut once. That freezes the coverage units a script then conserves: cycle-free, no piece of your ask dropped.",
+		you: "▢ your cut",
+		gate: "gate · script floor + 1 judgment · ↺ fix",
+	},
+	{
+		name: "design",
+		note: "one fresh session per slice, dependency-ordered, all running at once. Every lane is live in the console. A genuine design fork reaches you without halting the others.",
+		you: "▢ your forks",
+	},
+	{
+		name: "review",
+		note: "your design gate, the pause that carries real judgment: every slice's design in one summary. Accept, or adjust interfaces and data types; the edit cascades to dependents before synthesis.",
+		you: "■ your design gate",
+	},
+	{
+		name: "plan",
+		note: "per-cluster sub-plans merge into one plan. A tier-scaled panel grades it before any code exists — correctness and completeness on a clean one-slice, two-phase run, the full five-dimension roster on anything larger; completeness and correctness are judged against your verbatim brief.",
+		gate: "gate · panel · ↺ fix",
+	},
+	{
+		name: "code",
+		note: "implement-ready code elaborated per phase in parallel, spliced into the plan by a script, and the code-bearing plan re-graded.",
+		gate: "gate · ↺ fix",
+	},
+	{
+		name: "land",
+		note: "phases implemented as dependency-gated waves — independent phases run at once, phases sharing a write-set stay ordered — then the result is validated against your brief. You confirm the commit plan; your name goes on the diff.",
+	},
+];
+---
+
+<section id="firstrun">
+	<div class="container">
+		<p class="kicker">§ first run · one command</p>
+		<h2>Your first run, end to end.</h2>
+		<p class="fr__lede">
+			Three commands of escalating commitment: look, inspect, go. The
+			runner drives the chain; you decide at the moments that shape the
+			outcome.
+		</p>
+
+		<div class="fr__duo">
+			<div class="fr__col">
+				<p class="mono fr__colHead">look · inspect · go</p>
+				<ol class="fr__cmds">
+					{COMMANDS.map((c) => (
+						<li class="fr__cmdRow">
+							<pre class="fr__pre"><code>{c.cmd}</code></pre>
+							<p class="fr__cmdNote">{c.note}</p>
+						</li>
+					))}
+				</ol>
+			</div>
+
+			<div class="fr__col">
+				<p class="mono fr__colHead fr__colHead--trace">what happens on go</p>
+				<ol class="fr__trace">
+					{TRACE.map((t, i) => (
+						<li class="fr__step">
+							<span class="fr__num mono">{String(i + 1).padStart(2, "0")}</span>
+							<span class="fr__rail" aria-hidden="true"></span>
+							<div class="fr__body">
+								<p class="fr__name mono">
+									{t.name}
+									{t.you && <span class="fr__you mono">{t.you}</span>}
+									{t.gate && <span class="fr__gate mono">{t.gate}</span>}
+								</p>
+								<p class="fr__note">{t.note}</p>
+							</div>
+						</li>
+					))}
+				</ol>
+			</div>
+		</div>
+
+		<p class="fr__foot mono">
+			one JSONL ledger per run · <code>.rpiv/workflows/runs/&lt;id&gt;.jsonl</code> · resume any run with <code>/wf @&lt;run-id&gt;</code>
+		</p>
+	</div>
+</section>
+
+<style>
+	.fr__lede {
+		font-family: var(--font-serif);
+		max-width: 60ch;
+		color: var(--text-quiet);
+		font-size: var(--type-lead);
+		line-height: var(--leading-body);
+		margin: var(--space-4) 0 var(--space-7);
+		text-wrap: pretty;
+	}
+
+	/* ── Two-column duo: commands left, trace right ── */
+	.fr__duo {
+		display: grid;
+		grid-template-columns: minmax(300px, 420px) 1fr;
+		gap: var(--space-8);
+		margin-bottom: var(--space-6);
+	}
+	.fr__colHead {
+		font-size: var(--type-tiny);
+		text-transform: uppercase;
+		letter-spacing: 0.16em;
+		color: var(--ochre);
+		margin: 0 0 var(--space-4);
+		padding-bottom: var(--space-2);
+		border-bottom: 1px solid var(--rule);
+	}
+	.fr__colHead--trace { color: var(--sage); }
+
+	/* ── Command rows ── */
+	.fr__cmds {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: grid;
+		gap: var(--space-5);
+	}
+	.fr__pre {
+		margin: 0 0 var(--space-2);
+		border-left-color: var(--ochre);
+	}
+	.fr__cmdNote {
+		font-family: var(--font-serif);
+		font-size: var(--type-small);
+		color: var(--text-quiet);
+		margin: 0;
+		text-wrap: pretty;
+	}
+
+	/* ── Vertical trace ── */
+	.fr__trace {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+	}
+	.fr__step {
+		display: grid;
+		grid-template-columns: 32px 17px 1fr;
+		gap: 0 var(--space-4);
+	}
+	.fr__num {
+		color: var(--text-distant);
+		font-size: var(--type-tiny);
+		letter-spacing: 0.18em;
+		padding-top: 3px;
+	}
+	/* the rail — a node dot with a connecting spine to the next step */
+	.fr__rail {
+		position: relative;
+		display: block;
+	}
+	.fr__rail::before {
+		content: "";
+		position: absolute;
+		top: 5px;
+		left: 50%;
+		transform: translateX(-50%);
+		width: 9px;
+		height: 9px;
+		border-radius: 50%;
+		background: var(--ink);
+		border: 1.5px solid var(--sage);
+	}
+	.fr__rail::after {
+		content: "";
+		position: absolute;
+		top: 18px;
+		bottom: -4px;
+		left: 50%;
+		transform: translateX(-50%);
+		width: 1px;
+		background: var(--sage-deep);
+		opacity: 0.55;
+	}
+	.fr__step:last-child .fr__rail::after { display: none; }
+
+	.fr__body { padding-bottom: var(--space-5); }
+	.fr__name {
+		font-size: var(--type-small);
+		color: var(--washi);
+		letter-spacing: 0.02em;
+		margin: 0 0 var(--space-1);
+		display: flex;
+		align-items: baseline;
+		gap: var(--space-3);
+	}
+	/* hanko tick — the driver moment */
+	.fr__you {
+		font-size: var(--type-tiny);
+		color: var(--ochre);
+		letter-spacing: 0.1em;
+	}
+	.fr__gate {
+		font-size: var(--type-tiny);
+		color: var(--text-distant);
+		letter-spacing: 0.06em;
+	}
+	.fr__note {
+		font-family: var(--font-serif);
+		font-size: var(--type-small);
+		line-height: var(--leading-snug);
+		color: var(--text-quiet);
+		margin: 0;
+		max-width: 58ch;
+		text-wrap: pretty;
+	}
+
+	.fr__foot {
+		font-size: var(--type-tiny);
+		color: var(--text-distant);
+		letter-spacing: 0.04em;
+		padding: var(--space-3) 0;
+		border-top: 1px solid var(--rule);
+		border-bottom: 1px solid var(--rule);
+		max-width: 920px;
+		margin: 0;
+	}
+	.fr__foot code { color: var(--text-quiet); }
+
+	@media (max-width: 960px) {
+		.fr__duo { grid-template-columns: 1fr; gap: var(--space-7); }
+	}
+</style>

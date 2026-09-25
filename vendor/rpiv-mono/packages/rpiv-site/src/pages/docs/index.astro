@@ -1,0 +1,30 @@
+---
+import { getEntry, render } from "astro:content";
+import DocsLayout from "../../layouts/DocsLayout.astro";
+import { DOCS_ROOT_ID } from "../../lib/docs";
+
+// The docs root IS the getting-started article — one click from the nav
+// lands on real content with the sidebar (the actual section index) visible.
+// The old /docs hub page duplicated the install steps and hid the sidebar;
+// /docs/getting-started now redirects here (see astro.config.mjs).
+const entry = await getEntry("docs", DOCS_ROOT_ID);
+if (!entry) {
+	throw new Error(`Docs root entry "${DOCS_ROOT_ID}" is missing from the docs collection`);
+}
+const { Content, headings } = await render(entry);
+---
+
+<DocsLayout
+	title={`${entry.data.title} · rpiv-pi docs`}
+	description={entry.data.description}
+	headings={headings}
+	docArticle={{ section: entry.data.section }}
+>
+	<article class="prose prose--docs" data-pagefind-body>
+		<h1 data-pagefind-meta="title">{entry.data.title}</h1>
+		{entry.data.description && (
+			<p class="docs-lede">{entry.data.description}</p>
+		)}
+		<Content />
+	</article>
+</DocsLayout>

@@ -10,7 +10,15 @@ package's own `pi` manifest. Point at the vendored copies directly:
 ```sh
 pi install /absolute/path/to/pi_setup_303/vendor/ponytail
 pi install /absolute/path/to/pi_setup_303/vendor/pi-subagents
+pi install /absolute/path/to/pi_setup_303/vendor/pi-blackhole
+pi install /absolute/path/to/pi_setup_303/vendor/rpiv-mono/packages/rpiv-ask-user-question
+pi install /absolute/path/to/pi_setup_303/vendor/rpiv-mono/packages/rpiv-todo
 ```
+
+Untested: the last three were vendored without checking that they install or
+load. `pi-blackhole` needs its `dist/` built (`pnpm install && pnpm build`), and
+the `rpiv-*` packages expect their monorepo siblings installed from
+`vendor/rpiv-mono`.
 
 pi-subagents has runtime dependencies (`acorn`, `jiti`, `undici`, `yaml`). If pi
 does not resolve them on install, run:

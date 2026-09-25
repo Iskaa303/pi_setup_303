@@ -1,0 +1,136 @@
+---
+import type { GetStaticPaths } from "astro";
+import { render } from "astro:content";
+import Base from "../../layouts/Base.astro";
+import Nav from "../../components/Nav.astro";
+import { computeReadingTime, getPublishedPosts } from "../../lib/posts";
+import "../../styles/prose.css";
+
+export const getStaticPaths: GetStaticPaths = async () => {
+	const posts = await getPublishedPosts();
+	return posts.map((entry) => ({
+		params: { slug: entry.id },
+		props: { entry, readingTime: computeReadingTime(entry.body ?? "") },
+	}));
+};
+
+const { entry, readingTime } = Astro.props;
+const { Content } = await render(entry);
+---
+
+<Base
+	title={`${entry.data.title} · rpiv-pi`}
+	description={entry.data.description}
+	article={{
+		datePublished: entry.data.pubDate.toISOString(),
+		dateModified: entry.data.updatedDate?.toISOString(),
+		author: entry.data.author,
+	}}
+>
+	<Nav />
+	<main>
+		<section class="post-shell">
+			<div class="container">
+				<div class="post-column">
+				<a href="/blog" class="back-link mono">← back to blog</a>
+				<p class="post-meta mono">
+					<time datetime={entry.data.pubDate.toISOString()}>
+						{entry.data.pubDate.toLocaleDateString("en-US", {
+							year: "numeric",
+							month: "long",
+							day: "numeric",
+						})}
+					</time>
+					<span class="post-meta__sep" aria-hidden="true">·</span>
+					<span>{entry.data.author}</span>
+					<span class="post-meta__sep" aria-hidden="true">·</span>
+					<span>{readingTime} min</span>
+				</p>
+				<h1 class="post-title">{entry.data.title}</h1>
+				{entry.data.tags.length > 0 && (
+					<div class="post-tags">
+						{entry.data.tags.map((tag) => (
+							<span class="chip chip--muted">{tag}</span>
+						))}
+					</div>
+				)}
+				<article class="prose prose--post">
+					<Content />
+				</article>
+				</div>
+			</div>
+		</section>
+	</main>
+</Base>
+
+<style>
+	/* Center the reading column. font-size must be set here, not just on
+	   .prose--post, so the 64ch cap resolves against the post body size —
+	   otherwise the wrapper measures 64ch of the 16px root and clips the
+	   article narrower than its own measure. */
+	.post-column {
+		font-size: var(--type-reading);
+		max-width: 64ch;
+		margin-inline: auto;
+	}
+
+	.back-link {
+		display: inline-block;
+		font-size: var(--type-small);
+		letter-spacing: 0.1em;
+		color: var(--text-distant);
+		border-bottom: none;
+		text-decoration: none;
+		margin-bottom: var(--space-7);
+		transition: color var(--dur-ink) var(--ease-ink);
+	}
+	.back-link:hover {
+		color: var(--sage);
+	}
+
+	.post-meta {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: var(--space-2);
+		font-size: var(--type-small);
+		letter-spacing: 0.1em;
+		color: var(--text-distant);
+		margin-bottom: var(--space-4);
+	}
+
+	.post-meta__sep {
+		color: var(--rule-strong);
+	}
+
+	.post-title {
+		font-size: var(--type-post-title);
+		line-height: var(--leading-snug);
+		margin-bottom: var(--space-5);
+	}
+
+	.post-tags {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-2);
+		margin-bottom: 0;
+	}
+
+	/* Header→body band: the article opens 64px below the tags (or the
+	   title when a post has none — adjacent margins collapse to the max,
+	   so the gap is 64px either way). */
+	article.prose {
+		margin-top: var(--space-8);
+	}
+
+	/* Editorial headroom — post pages breathe more than the 64px
+	   `main > section` default; step back down on phones. */
+	.post-shell {
+		padding-top: var(--space-9);
+	}
+	@media (max-width: 720px) {
+		.post-shell {
+			padding-top: var(--space-8);
+		}
+	}
+</style>
