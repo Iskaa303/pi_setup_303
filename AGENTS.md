@@ -1,0 +1,3 @@
+- `vendor/` is upstream code. Never edit it to fix something, patch the upstream repo or drop a local override in `extensions/` or `skills/` instead.
+- `extensions/<name>/index.ts` and `skills/<name>/SKILL.md` are the drop-in locations for personal resources.
+- keep `THIRD-PARTY-NOTICES.md` in sync when a vendored package is updated.
