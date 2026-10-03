@@ -3,10 +3,12 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    pi-flake.url = "github:ChauDucToan/pi-flake";
+    pi-flake.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
-    { self, nixpkgs }:
+    { self, nixpkgs, pi-flake }:
     let
       lib = nixpkgs.lib;
       systems = [
@@ -16,6 +18,28 @@
         "aarch64-darwin"
       ];
       forAllSystems = f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+
+      # pi, pinned. Upstream publishes one prebuilt tarball per system; these
+      # hashes are from those releases and never move on their own.
+      piVersion = "0.99.1";
+      piAssets = {
+        "x86_64-linux" = {
+          platform = "linux-x64";
+          hash = "sha256-yBuaNnuymF+kWiwNTxKxR6zENlVoORClq/k3/iIghCU=";
+        };
+        "aarch64-linux" = {
+          platform = "linux-arm64";
+          hash = "sha256-5jKp5VvIZSX/0PcdCRhdYwiD9kuc/IWPcx0e3JJxaVQ=";
+        };
+        "x86_64-darwin" = {
+          platform = "darwin-x64";
+          hash = "sha256-mtb8NW9NCLnRDopvkprBukkI3VM1RLqYnFTHO5K1PhM=";
+        };
+        "aarch64-darwin" = {
+          platform = "darwin-arm64";
+          hash = "sha256-RpKrodzUghm2HttOzrw8M/YZnr5lKZIo/OW6acMaI6Y=";
+        };
+      };
 
       # A pi package is a directory with package.json + pi resources. npm ci runs
       # in buildNpmPackage's dependency phase (its own fixed-output derivation, so
@@ -102,6 +126,18 @@
           lock = ./nix/locks/rpiv-todo.json;
           depsHash = "sha256-UCKRcw0hQKSqYK65RF64KladGVC7gmXwQfRbK4qofu8=";
         };
+        pi-notify = {
+          src = ./vendor/pi-notify;
+          version = "0.2.11";
+          lock = ./nix/locks/pi-notify.json;
+          depsHash = "sha256-neDySBkeTOsPfZEH3pdIQ5WdrB80wDrVQqGl1NppYQQ=";
+        };
+        pi-statusline = {
+          src = ./vendor/pi-statusline;
+          version = "0.50.2";
+          lock = ./nix/locks/pi-statusline.json;
+          depsHash = "sha256-50LPdwXkFuiatXMP8nxF7j4dd8Yue0hizK7ojAOnwwg=";
+        };
       };
 
       # Optional real-Firefox engine for ketch-web-access. The npm package only;
@@ -160,17 +196,32 @@
       ];
     in
     {
+      # pi itself, pinned to one version: upstream's prebuilt release tarballs.
+      # Nothing here moves when your lock is updated — bumping pi is a deliberate
+      # edit of piVersion + piAssets.
+      lib.piVersion = piVersion;
+
+      overlays.default = final: _prev: {
+        pi = final.callPackage ./nix/pi.nix {
+          version = piVersion;
+          assets = piAssets;
+        };
+        pi-coding-agent = final.pi;
+      };
+
       packages = forAllSystems (
         pkgs:
         let
-          # nixpkgs already packages ketch; override with programs.pi-setup.ketch
-          # if you want a newer upstream build.
           ketch = pkgs.ketch;
           camoufox-js = mkCamoufoxJs pkgs;
           extensions = mkExtensionPkgs pkgs;
+          pi = pkgs.callPackage ./nix/pi.nix {
+            version = piVersion;
+            assets = piAssets;
+          };
         in
         rec {
-          inherit ketch camoufox-js;
+          inherit ketch camoufox-js pi;
 
           # All extensions in one output, for inspection or `pi install`.
           pi-setup = pkgs.symlinkJoin {
@@ -198,8 +249,20 @@
           own = self.packages.${pkgs.stdenv.hostPlatform.system};
         in
         {
+          # pi-flake supplies the programs.pi-coding-agent option surface; this
+          # module fills it in and pins the pi binary. Import it here so your
+          # config only needs this one module.
+          imports = [ pi-flake.homeManagerModules.default ];
+
           options.programs.pi-setup = {
             enable = lib.mkEnableOption "pi extensions from pi_setup_303";
+
+            pi = lib.mkOption {
+              type = lib.types.package;
+              default = pkgs.pi;
+              defaultText = lib.literalExpression "the pinned pi in this flake";
+              description = "The pi binary. Pinned here so a lock update cannot move it.";
+            };
 
             extensions = lib.mkOption {
               type = lib.types.listOf lib.types.str;
@@ -253,6 +316,7 @@
 
             programs.pi-coding-agent = {
               enable = true;
+              package = cfg.pi;
               agentFiles.settings.value = cfg.settings // { packages = cfg.extensions; };
               extraEnv = {
                 KETCH_BIN = "${cfg.ketch}/bin/ketch";
@@ -263,8 +327,9 @@
               }
               // lib.optionalAttrs (pkgs.stdenv.hostPlatform.isLinux) {
                 # Camoufox's Firefox binary links against libraries NixOS does not
-                # put on any default path.
-                LD_LIBRARY_PATH = lib.makeLibraryPath (camoufoxLibs pkgs);
+                # put on any default path. cc.lib is included because pi's own
+                # wrapper prefixes it, and extraEnv replaces (not appends) to it.
+                LD_LIBRARY_PATH = lib.makeLibraryPath (camoufoxLibs pkgs ++ [ pkgs.stdenv.cc.cc.lib ]);
               };
             };
           };
