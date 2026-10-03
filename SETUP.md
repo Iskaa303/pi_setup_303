@@ -134,9 +134,9 @@ nix build .#pi --refresh  # copy the four got: hashes back
 
 ## Licenses
 
-`./nix/collect-licenses.sh` copies every license into `licenses/`: `vendor/` for
-code in this repo, `tools/` for programs called at runtime (pi, ketch,
-camoufox, …), `npm/` for npm dependencies. `THIRD-PARTY-NOTICES.md` is the index.
+`licenses/vendor/` holds the licenses of the code copied into this repo,
+`licenses/tools/` the ones for the programs called at runtime (pi, ketch,
+camoufox, playwright-core). `THIRD-PARTY-NOTICES.md` is the index.
 
 ## pi-subagents and ketch-web-access
 

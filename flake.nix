@@ -94,11 +94,45 @@
           # `name` field, which is scoped for the rpiv packages.
           packageName = (builtins.fromJSON (builtins.readFile (src + "/package.json"))).name;
           source = if deps == null then src else "${deps}/lib/node_modules/${packageName}";
+          # pi refuses to load a package that declares pi's own modules as
+          # regular dependencies ("duplicate runtime modules"). Move them to
+          # peerDependencies and drop the copies from node_modules.
+          fixPeerDeps = ''
+            package="$out/package.json"
+            if [ -f "$package" ]; then
+              node --input-type=module -e '
+                import { readFileSync, writeFileSync } from "node:fs";
+                const file = process.argv[1];
+                const host = /^(typebox|@earendil-works\/|pi-)/;
+                const pkg = JSON.parse(readFileSync(file, "utf8"));
+                const dependencies = pkg.dependencies ?? {};
+                const peers = pkg.peerDependencies ?? {};
+                let moved = 0;
+                for (const [name] of Object.entries(dependencies)) {
+                  if (!host.test(name)) continue;
+                  delete dependencies[name];
+                  peers[name] = "*";
+                  moved++;
+                }
+                if (!moved) process.exit(0);
+                pkg.dependencies = dependencies;
+                pkg.peerDependencies = peers;
+                writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
+              ' "$package"
+              for name in $(node -e 'const p=require("'"$package"'");console.log(Object.keys(p.peerDependencies??{}).join(" "))'); do
+                rm -rf "$out/node_modules/$name"
+              done
+            fi
+          '';
         in
-        pkgs.runCommand "pi-extension-${name}-${version}" { inherit source; } ''
+        pkgs.runCommand "pi-extension-${name}-${version}" {
+          inherit source;
+          nativeBuildInputs = [ pkgs.nodejs ];
+        } ''
           mkdir -p $out
           cp -a "$source/." $out/
           chmod -R u+w $out
+          ${fixPeerDeps}
         '';
 
       # Every extension in this repo, as a nix package.
@@ -276,13 +310,25 @@
 
             extensions = lib.mkOption {
               type = lib.types.listOf lib.types.str;
-              default = map (name: toString own.${name}) extensionNames;
-              defaultText = lib.literalExpression "every extension package in this flake";
+              default = [ ];
+              defaultText = lib.literalExpression ''"[]: pi auto-discovers ~/.pi/agent/extensions"'';
               description = ''
-                Pi package sources written into settings.json. Absolute store
-                paths are loaded in place, so nothing is copied into ~/.pi.
-                Set it to a subset to install fewer, or add npm:/git: sources
-                here to declare those too.
+                Pi package sources written into settings.json. Empty by
+                default, because the extension packages are symlinked into
+                ~/.pi/agent/extensions/<name> and pi discovers them there
+                under readable names. Set this only to add sources that are not
+                symlinked (npm:/git: work here).
+              '';
+            };
+
+            linkExtensions = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = ''
+                Symlink every extension package into
+                ~/.pi/agent/extensions/<name> instead of listing store paths in
+                settings.json. Same content either way; symlinks are readable
+                in pi's startup output and in error messages.
               '';
             };
 
@@ -324,10 +370,20 @@
           config = lib.mkIf cfg.enable {
             home.packages = [ cfg.ketch ];
 
+            # ~/.pi/agent/extensions/<name> -> /nix/store/... so pi finds each
+            # extension by its real name instead of a store hash.
+            home.file = lib.mapAttrs'
+              (name: _: {
+                source = "${own.${name}}";
+              })
+              (lib.filterAttrs (name: _: cfg.linkExtensions) own.extensions);
+
             programs.pi-coding-agent = {
               enable = true;
               package = cfg.pi;
-              agentFiles.settings.value = cfg.settings // { packages = cfg.extensions; };
+              agentFiles.settings.value = cfg.settings // {
+                packages = cfg.extensions;
+              };
               extraEnv = {
                 KETCH_BIN = "${cfg.ketch}/bin/ketch";
               }

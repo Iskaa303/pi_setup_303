@@ -27,8 +27,8 @@ by `./nix/collect-licenses.sh`.
 monorepo; only those two packages plus `rpiv-config` are vendored. Their
 dependencies install from npm.
 
-Unverified: none of these vendored copies has been build- or install-tested
-through `pi install` (the Nix/Docker/bare-host installers do install them).
+Each vendored package is built and installed by the flake; `nix flake check` runs
+the extension tests.
 
 ## Derivation sources (not vendored)
 
@@ -48,9 +48,10 @@ MIT-licensed projects. Full license texts are kept next to the code in
 | [pi](https://github.com/earendil-works/pi) | the agent itself; `packages.pi` pins `v0.99.1` | MIT, © earendil-works |
 | [pi-flake](https://github.com/ChauDucToan/pi-flake) | declares the `programs.pi-coding-agent` options this flake fills in; `nix/pi.nix` is adapted from its `package.nix` | MIT, © ChauDucToan |
 
-License texts for all of the above are in [`licenses/tools/`](./licenses/tools)
-and [`licenses/npm/`](./licenses/npm).
-| [camoufox-js](https://github.com/apify/camoufox-js) | optional real-Firefox fetch engine; installed as an npm dependency, browser fetched with `npx camoufox-js fetch` | MIT, © 2024 daijro / Apify |
+License texts for the programs above are in [`licenses/tools/`](./licenses/tools),
+and for the code copied into this repo in [`licenses/vendor/`](./licenses/vendor).
+npm dependencies are not collected separately; each stays inside its package's
+own install tree with its own LICENSE file.
 
 ## Pruned vendor content
 
