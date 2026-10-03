@@ -1,0 +1,19 @@
+{
+  "name": "ketch-web-access",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ketch-backed web_search / fetch_content / get_search_content / source_check for Pi, plus ketch_extract, ketch_doctor, and ketch_browser.",
+  "type": "module",
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/logic.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}

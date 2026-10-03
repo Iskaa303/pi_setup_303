@@ -1,0 +1,10 @@
+{
+  "name": "camoufox-js-nix",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Build shim: packages camoufox-js so nix can provide the real-Firefox engine for ketch-web-access",
+  "license": "MIT",
+  "dependencies": {
+    "camoufox-js": "0.12.0"
+  }
+}
