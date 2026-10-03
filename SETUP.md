@@ -10,50 +10,50 @@ pi-setup.url = "github:<you>/pi_setup_303";
 
 ## Home Manager (the way this setup is used)
 
-`pi_setup_303` builds on [pi-flake](https://github.com/ChauDucToan/pi-flake), so
-you keep using pi-flake as your base and this flake only adds the extensions:
+This flake packages pi itself, so your config needs **only this input** —
+pi-flake is used internally for its option definitions, not by you:
 
 ```nix
-{ inputs, pkgs, username, ... }: {
-  nixpkgs.overlays = [ inputs.pi-flake.overlays.default ];
+inputs.pi-setup.url = "github:Iskaa303/pi_setup_303";
+inputs.pi-setup.inputs.nixpkgs.follows = "nixpkgs";
 
-  hm = {
-    disabledModules = [ "programs/pi-coding-agent.nix" ];
-    imports = [
-      inputs.pi-flake.homeManagerModules.default   # pi itself, your config
-      inputs.pi-setup.homeManagerModules.default    # this repo's extensions
-    ];
+hm = {
+  disabledModules = [ "programs/pi-coding-agent.nix" ];
+  imports = [ inputs.pi-setup.homeManagerModules.default ];
 
-    programs.pi-coding-agent = {
-      enable = true;
-      # your existing extraEnv, statusline, shazam compat, trust.json, ...
+  nixpkgs.overlays = [ inputs.pi-setup.overlays.default ];  # optional: pkgs.pi
+
+  programs.pi-setup = {
+    enable = true;
+    camoufox = true;          # real-Firefox fetch engine
+
+    settings = {              # merged into ~/.pi/agent/settings.json
+      defaultModel = "stealth/ox-alpha";
+      defaultProvider = "openrouter";
+      theme = "dark";
     };
   };
-}
+};
 ```
-
-The module from this flake fills in `programs.pi-coding-agent` for you:
 
 | Option | Default | Effect |
 |---|---|---|
 | `programs.pi-setup.enable` | `false` | turn everything below on |
-| `programs.pi-setup.extensions` | every extension in this repo | `pi install <store path>` at activation |
-| `programs.pi-setup.ketch` | this flake's `packages.ketch` | added to `home.packages`, `KETCH_BIN` set |
+| `programs.pi-setup.pi` | this flake pinned `packages.pi` | the pi binary |
+| `programs.pi-setup.extensions` | every extension package | written into `settings.json` as `packages` |
+| `programs.pi-setup.settings` | `{}` | the rest of `settings.json` |
+| `programs.pi-setup.ketch` | `pkgs.ketch` | added to `home.packages`, `KETCH_BIN` set |
 | `programs.pi-setup.camoufox` | `false` | `CAMOUFOX_JS` points at the nix-built client |
 
-Leave `programs.pi-coding-agent.extensions` alone unless you want to add or drop
-individual extensions:
+`~/.pi/agent/settings.json` becomes a symlink into the store:
 
-```nix
-programs.pi-setup.extensions = [
-  (toString inputs.pi-setup.packages.${pkgs.stdenv.hostPlatform.system}.ketch-web-access)
-  # everything else stays at the default: use
-  # inputs.pi-setup.packages.${pkgs.stdenv.hostPlatform.system}.<name>
-];
-```
-
-On NixOS (system-wide) instead of Home Manager, use `services.pi-coding-agent`
-from pi-flake and point `extensions` at the same store paths.
+- `pi install` / `pi remove` will fail (read-only file). Add or drop
+  extensions through `programs.pi-setup.extensions` instead.
+- pi bookkeeping that writes settings (e.g. `lastChangelogVersion`) is
+  silently skipped; everything else (auth.json, models.json, sessions) is
+  untouched.
+- npm:/git: sources still work — they are pi-managed and listed in
+  `packages` alongside the nix paths.
 
 ## Packages
 
@@ -119,9 +119,24 @@ Camoufox's Firefox binary is a ~660MB download into
 also needs the Firefox shared libraries, which the module puts on
 `LD_LIBRARY_PATH` for you.
 
-`ketch` itself is `pkgs.ketch` from nixpkgs; override it with
-`programs.pi-setup.ketch = pkgs.callPackage ...` if you want a newer upstream
-build.
+`ketch` is `pkgs.ketch` from nixpkgs (your own overlay shadows it if you
+build it); override with `programs.pi-setup.ketch` to pin something else.
+
+## Bumping pi
+
+pi is pinned to `piVersion` in `flake.nix` using upstream prebuilt release
+tarballs, so nothing moves on its own:
+
+```sh
+$EDITOR flake.nix          # change piVersion, put placeholder hashes in piAssets
+nix build .#pi --refresh  # copy the four got: hashes back
+```
+
+## Licenses
+
+`./nix/collect-licenses.sh` copies every license into `licenses/`: `vendor/` for
+code in this repo, `tools/` for programs called at runtime (pi, ketch,
+camoufox, …), `npm/` for npm dependencies. `THIRD-PARTY-NOTICES.md` is the index.
 
 ## pi-subagents and ketch-web-access
 
@@ -146,8 +161,10 @@ nix eval --raw .#ketch-web-access   # prints the store path to paste
 
 ## Repository layout
 
-- `flake.nix` — packages, Home Manager module, checks
+- `flake.nix` — pi, the extension packages, the Home Manager module, checks
 - `devenv.nix` — development environment (`devenv shell`, `devenv test`)
 - `nix/locks/` — package-lock.json per extension with npm dependencies
+- `nix/pi.nix` — the pinned pi build
+- `licenses/` — collected license texts (see `THIRD-PARTY-NOTICES.md`)
 - `extensions/ketch-web-access/` — my web extension (see its README)
-- `vendor/` — trimmed upstream copies, each with its own LICENSE
+- `vendor/` — upstream copies, each with its own LICENSE

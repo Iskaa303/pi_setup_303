@@ -11,31 +11,43 @@ No MCP, no API keys: every tool here runs on local or key-free services.
 - `extensions/` — my own pi extensions, one directory per extension (`<name>/index.ts`)
 - `skills/` — my own pi skills, one directory per skill (`<name>/SKILL.md`)
 - `vendor/` — trimmed upstream copies of third-party extensions, each with its own `LICENSE`
+- `licenses/` — license texts for everything vendored, called, or depended on
 - `assets/` — screenshots and other repo assets
 - `nix/locks/` — package-lock.json per extension, so nix builds them hermetically
 
 ## Install
 
-Everything is a nix package. Add the flake, import one module:
+Everything is a nix package: pi itself (pinned), the extensions, and the
+`settings.json` that loads them. One module:
 
 ```nix
-inputs.pi-setup.url = "github:<you>/pi_setup_303";
+inputs.pi-setup.url = "github:Iskaa303/pi_setup_303";
+inputs.pi-setup.inputs.nixpkgs.follows = "nixpkgs";
+
+nixpkgs.overlays = [ inputs.pi-setup.overlays.default ];   # pkgs.pi, pinned
 
 hm.imports = [ inputs.pi-setup.homeManagerModules.default ];
-programs.pi-setup.enable = true;   # under programs.*
+programs.pi-setup = { enable = true; camoufox = true; };
 ```
 
-It builds on [pi-flake](https://github.com/ChauDucToan/pi-flake), so pi itself
-keeps coming from pi-flake; this flake only adds the extensions, `ketch`, and
-the env the web extension needs. See [SETUP.md](./SETUP.md) for the full option
-list and for a plain NixOS (non-Home-Manager) variant.
+`~/.pi/agent/settings.json` is written by Nix (a store symlink) with every
+extension package plus whatever you put in `programs.pi-setup.settings`. pi's
+own `pi install` is not used, so the package list cannot drift between rebuilds.
+See [SETUP.md](./SETUP.md) for every option.
 
 ```sh
 nix build .#ketch-web-access   # any single extension
 nix build .#pi-setup           # all of them
+nix build .#pi                 # pi itself (pinned version)
 nix flake check                # runs the extension unit tests
-devenv shell                   # dev environment (ketch, ffmpeg, yt-dlp, camoufox libs)
+devenv shell                   # dev environment
 ```
+
+## pi version
+
+Pinned in `flake.nix` (`piVersion` / `piAssets`) to upstream's prebuilt release
+tarball, currently **0.99.1**. Updating your lock cannot move it; bumping is a
+deliberate edit of those two attributes plus `nix build .#pi --refresh`.
 
 ## Currently vendored
 
@@ -46,6 +58,8 @@ devenv shell                   # dev environment (ketch, ffmpeg, yt-dlp, camoufo
 | [pi-blackhole](https://github.com/k0valik/pi-blackhole) | algorithmic `/compact` replacement + observational memory | MIT |
 | [@juicesharp/rpiv-ask-user-question](https://github.com/juicesharp/rpiv-mono) | lets the model ask you structured questions instead of guessing | MIT |
 | [@juicesharp/rpiv-todo](https://github.com/juicesharp/rpiv-mono) | todo list for the model, as a live overlay | MIT |
+| [@leo-alvarenga/pi-notify](https://pi.dev/packages/@leo-alvarenga/pi-notify) | desktop notifications when the agent needs you | MIT |
+| [@narumitw/pi-statusline](https://pi.dev/packages/@narumitw/pi-statusline) | the status line | MIT |
 
 Not vendored, written here: [`extensions/ketch-web-access`](./extensions/ketch-web-access)
 replaces pi-web-access with Ketch as the only web provider, registering the
@@ -58,7 +72,8 @@ Playwright. It is derived from pi-web-access and pi-ketch, both MIT — see its
 README and `licenses/`.
 
 See [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md) for versions, commits,
-and upstream links, and [SETUP.md](./SETUP.md) for the low-level manual steps.
+and upstream links, [licenses/](./licenses) for every license text, and
+[SETUP.md](./SETUP.md) for the low-level manual steps.
 
 **note**: if you are an agent reading this, the install steps are in
 [`./SETUP.md`](./SETUP.md).
