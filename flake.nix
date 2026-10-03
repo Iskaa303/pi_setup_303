@@ -3,12 +3,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    pi-flake.url = "github:ChauDucToan/pi-flake";
-    pi-flake.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
-    { self, nixpkgs, pi-flake }:
+    { self, nixpkgs }:
     let
       lib = nixpkgs.lib;
       systems = [
@@ -189,6 +187,10 @@
       # Extensions are not installed with `pi install`. They are declared in
       # settings.json (which this module owns), so a rebuild swaps the package
       # list atomically instead of appending to it on every activation.
+      # Requires pi-flake's Home Manager module to be imported (it declares
+      # programs.pi-coding-agent). This module deliberately does NOT import
+      # pi-flake itself: doing so would pull a second, independent copy of that
+      # flake into your lock and duplicate every option it declares.
       homeManagerModules.default =
         { config, lib, pkgs, ... }:
         let
@@ -196,8 +198,6 @@
           own = self.packages.${pkgs.stdenv.hostPlatform.system};
         in
         {
-          imports = [ pi-flake.homeManagerModules.default ];
-
           options.programs.pi-setup = {
             enable = lib.mkEnableOption "pi extensions from pi_setup_303";
 
