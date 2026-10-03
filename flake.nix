@@ -183,8 +183,12 @@
       );
 
       # Import this from a Home Manager config that already uses pi-flake; it
-      # fills in programs.pi-coding-agent with this repo's extensions, ketch on
-      # PATH, and the ketch binary the extension shells out to.
+      # fills in programs.pi-coding-agent: this repo's extensions in a nix-owned
+      # settings.json, ketch on PATH, and the env the web extension needs.
+      #
+      # Extensions are not installed with `pi install`. They are declared in
+      # settings.json (which this module owns), so a rebuild swaps the package
+      # list atomically instead of appending to it on every activation.
       homeManagerModules.default =
         { config, lib, pkgs, ... }:
         let
@@ -200,7 +204,30 @@
             extensions = lib.mkOption {
               type = lib.types.listOf lib.types.str;
               default = map (name: toString own.${name}) extensionNames;
-              description = "Extension sources to `pi install`; defaults to every extension in this repo.";
+              defaultText = lib.literalExpression "every extension package in this flake";
+              description = ''
+                Pi package sources written into settings.json. Absolute store
+                paths are loaded in place, so nothing is copied into ~/.pi.
+                Set it to a subset to install fewer, or add npm:/git: sources
+                here to declare those too.
+              '';
+            };
+
+            settings = lib.mkOption {
+              type = lib.types.attrs;
+              default = { };
+              example = lib.literalExpression ''
+                {
+                  defaultModel = "stealth/ox-alpha";
+                  defaultProvider = "openrouter";
+                  theme = "dark";
+                }
+              '';
+              description = ''
+                Extra contents for ~/.pi/agent/settings.json, merged under the
+                package list. Only `packages` is managed by this module; put
+                model, theme and shell settings here.
+              '';
             };
 
             ketch = lib.mkOption {
@@ -226,7 +253,7 @@
 
             programs.pi-coding-agent = {
               enable = true;
-              inherit (cfg) extensions;
+              agentFiles.settings.value = cfg.settings // { packages = cfg.extensions; };
               extraEnv = {
                 KETCH_BIN = "${cfg.ketch}/bin/ketch";
               }
