@@ -58,6 +58,7 @@
           lock ? null,
           depsHash ? null,
           build ? null,
+          prune ? true,
         }:
         let
           # buildNpmPackage installs into $out/lib/node_modules/<name>; `pi
@@ -74,6 +75,13 @@
                 # `build` runs while devDependencies are still installed.
                 dontNpmBuild = build == null;
                 npmBuildScript = lib.optionalString (build != null) build;
+                # npm pack --dry-run in the install hook would run `prepack`,
+                # which these packages cannot run (their tarballs ship no
+                # scripts/ directory).
+                npmFlags = [ "--ignore-scripts" ];
+                # npm prune trips over some lockfiles; these packages have no
+                # dev deps to strip anyway.
+                dontNpmPrune = !prune;
                 postPatch = ''
                   rm -f pnpm-lock.yaml yarn.lock
                   cp ${lock} package-lock.json
@@ -131,12 +139,14 @@
           version = "0.2.11";
           lock = ./nix/locks/pi-notify.json;
           depsHash = "sha256-neDySBkeTOsPfZEH3pdIQ5WdrB80wDrVQqGl1NppYQQ=";
+          prune = false;
         };
         pi-statusline = {
           src = ./vendor/pi-statusline;
           version = "0.50.2";
           lock = ./nix/locks/pi-statusline.json;
           depsHash = "sha256-50LPdwXkFuiatXMP8nxF7j4dd8Yue0hizK7ojAOnwwg=";
+          prune = false;
         };
       };
 
