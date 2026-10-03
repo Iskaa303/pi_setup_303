@@ -372,11 +372,14 @@
 
             # ~/.pi/agent/extensions/<name> -> /nix/store/... so pi finds each
             # extension by its real name instead of a store hash.
-            home.file = lib.mapAttrs'
-              (name: _: {
-                source = "${own.${name}}";
-              })
-              (lib.filterAttrs (name: _: cfg.linkExtensions) own.extensions);
+            home.file = lib.optionalAttrs cfg.linkExtensions (
+              lib.listToAttrs (
+                map (name: {
+                  name = ".pi/agent/extensions/${name}";
+                  value = { source = "${own.${name}}"; };
+                }) extensionNames
+              )
+            );
 
             programs.pi-coding-agent = {
               enable = true;
