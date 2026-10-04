@@ -122,23 +122,13 @@ export default function decider(pi: ExtensionAPI): void {
         // The model relays the answer back, so the user is never asked by us
         // directly and nothing is assumed on their behalf.
         if (params.permission === undefined) {
-          const asked = await requestPermission({
-          tools: (ctx as unknown as { tools?: unknown }).tools,
-          store,
-          sessionId: id,
-          callTool: (name, params) => ctx.executeTool(name, params as never),
-          notify: (message) => ctx.ui?.notify?.(message, "info"),
-        });
-          if (asked === undefined) {
-            return textResult(
-              "The local decision model is off and I cannot ask you from inside a tool. Ask the user with ask_user_question (\"load the local decision model (decider-4b, 4B params)?\", options \"Turn it on\" / \"Keep it off\"), then call system_one_decide again with permission: true or false. Do not retry without asking.",
-            );
-          }
-          if (!asked) return textResult(disabledText("the user declined permission to load it"));
-        } else {
-          store.set(id, params.permission ? { enabled: true, declined: false } : { enabled: false, declined: true, declinedAt: Date.now() });
-          if (!params.permission) return textResult(disabledText("you declined permission to load it"));
+          return textResult(
+            `The local decision model is off. ${permissionPrompt((ctx as unknown as { tools?: unknown }).tools)}`,
+          );
         }
+        store.set(id, params.permission ? { enabled: true, declined: false } : { enabled: false, declined: true, declinedAt: Date.now() });
+        setStatus(ctx);
+        if (!params.permission) return textResult(disabledText("you declined permission to load it"));
       }
 
       const questions = params.questions.reduce<Record<string, unknown>>((all, question) => {

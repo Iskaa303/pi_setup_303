@@ -81,30 +81,6 @@ export function findAskTool(ctx: { tools?: unknown }): string | undefined {
   return ASK_TOOLS.find((candidate) => names.includes(candidate));
 }
 
-/**
- * Whether the ask tool answered "turn it on".
- *
- * Only `details.answers` counts. pi records nested tool calls — name, arguments,
- * nothing else — under `details.nestedCalls`, so a reply with no answers still
- * contains the question I just sent, including the words "Keep it off".
- * Stringifying the whole reply made the tool deny permission using its own
- * prompt text, which is how it silently "declined" without ever asking.
- */
-export function readGrant(reply: unknown): boolean | undefined {
-  const answers = (reply as { details?: { answers?: unknown } })?.details?.answers;
-  if (answers === undefined || answers === null) return undefined;
-  if (!Array.isArray(answers) && typeof answers !== "object") return undefined;
-  const values = Object.values(answers as Record<string, unknown>);
-  if (values.length === 0) return undefined;
-
-  const chosen = values
-    .map((value) => (typeof value === "string" ? value : JSON.stringify(value ?? "")))
-    .join(" | ");
-  if (/^keep it off$/i.test(chosen.trim())) return false;
-  if (/^turn it on$/i.test(chosen.trim())) return true;
-  return undefined;
-}
-
 export const PERMISSION_QUESTION = {
   header: "decider",
   question: "The local decision model (decider-4b, 4B params) is off. Load it when you need routing or escalate-or-not decisions?",
@@ -115,37 +91,19 @@ export const PERMISSION_QUESTION = {
 };
 
 /**
- * Ask the user for permission, recording the answer for this session only.
+ * What to tell the model when it needs the user's permission.
  *
- * Returns true if they said yes, false if they said no, and **undefined if no
- * answer was obtained** — no tool, a throw, an empty or unrecognised reply. The
- * caller must not turn undefined into a refusal.
+ * The question is always asked by the *model*, never from inside this tool: a
+ * nested `ctx.executeTool("ask_user_question", …)` returns without rendering a
+ * question (rpiv's own handler bails on `ctx.hasUI`), so calling it here only
+ * cost a dead turn and produced a misleading "I cannot ask you" message.
  */
-export async function requestPermission(args: {
-  tools: unknown;
-  store: SessionStore;
-  sessionId: string;
-  callTool: (name: string, params: unknown) => Promise<unknown>;
-  notify?: (message: string) => void;
-}): Promise<boolean | undefined> {
-  const tool = findAskTool({ tools: args.tools });
-  if (!tool) {
-    args.notify?.("decider is off until you say otherwise: /decider on, or answer when the model asks.");
-    return undefined;
+export function permissionPrompt(tools: unknown): string {
+  const askTool = findAskTool({ tools });
+  if (askTool) {
+    return `Ask the user with ${askTool}: question "${PERMISSION_QUESTION.question}", options "Turn it on" / "Keep it off". Then call system_one_decide again with permission: true or false. Do not retry without asking.`;
   }
-
-  let grant: boolean | undefined;
-  try {
-    grant = readGrant(await args.callTool(tool, { questions: [PERMISSION_QUESTION] }));
-  } catch (error) {
-    args.notify?.(`decider could not ask (${error instanceof Error ? error.message : String(error)}).`);
-    return undefined;
-  }
-
-  if (grant === undefined) return undefined;
-  args.store.set(args.sessionId, grant ? { enabled: true, declined: false } : { enabled: false, declined: true, declinedAt: Date.now() });
-  args.notify?.(grant ? "decider enabled for this session" : "decider stays off for this session");
-  return grant;
+  return `Ask the user directly: "${PERMISSION_QUESTION.question}" — offer "Turn it on" / "Keep it off". Then call system_one_decide again with permission: true or false. Do not retry without asking.`;
 }
 
 export interface HttpReply {
