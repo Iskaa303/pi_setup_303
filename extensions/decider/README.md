@@ -38,7 +38,7 @@ in context. So:
 | `/decider off` | disable without forgetting the refusal |
 | `/decider reset` | clear the refusal so the next call asks again |
 
-The status line shows `decider: on` / `off` / `declined` through
+The status line shows `decider: on` or `decider: off` through
 [pi-statusline](../vendor/pi-statusline)'s extension-status row.
 
 ## The tool

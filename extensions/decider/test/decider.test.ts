@@ -1,7 +1,7 @@
 // Run: node --experimental-strip-types --test test/decider.test.ts
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { findAskTool, normaliseAnswer, readGrant, SessionStore } from "../logic.ts";
+import { findAskTool, normaliseAnswer, readGrant, requestPermission, SessionStore } from "../logic.ts";
 
 test("a session starts off and nothing has been decided yet", () => {
   const store = new SessionStore();
@@ -52,6 +52,81 @@ test("readGrant only reports an actual answer, never a guess", () => {
   assert.equal(readGrant({ details: { answers: {} } }), undefined, "an empty answer is not consent");
   assert.equal(readGrant({ details: {} }), undefined);
   assert.equal(readGrant(undefined), undefined);
+});
+
+test("readGrant ignores the question it just sent (pi records nestedCalls)", () => {
+  // pi keeps a record of nested tool calls — name and arguments — in details.
+  // Those arguments contain the option labels, so stringifying the whole reply
+  // made the tool deny permission using its own prompt.
+  const reply = {
+    details: {
+      nestedCalls: [
+        {
+          name: "ask_user_question",
+          arguments: {
+            questions: [{ options: [{ label: "Keep it off" }, { label: "Turn it on" }] }],
+          },
+        },
+      ],
+    },
+  };
+  assert.equal(readGrant(reply), undefined, "no answers means no answer, not a refusal");
+});
+
+test("requestPermission asks, and only records a real answer", async () => {
+  const store = new SessionStore();
+  const asked: string[] = [];
+  const callTool = async (name: string) => {
+    asked.push(name);
+    return { details: { answers: { decider: "Turn it on" } } };
+  };
+
+  const grant = await requestPermission({ tools: ["ask_user_question"], store, sessionId: "s1", callTool });
+  assert.deepEqual(asked, ["ask_user_question"], "it must actually call the ask tool");
+  assert.equal(grant, true);
+  assert.equal(store.get("s1").enabled, true);
+});
+
+test("requestPermission records a refusal only when the user picks one", async () => {
+  const store = new SessionStore();
+  const grant = await requestPermission({
+    tools: ["ask_user_question"],
+    store,
+    sessionId: "s1",
+    callTool: async () => ({ details: { answers: { decider: "Keep it off" } } }),
+  });
+  assert.equal(grant, false);
+  assert.equal(store.get("s1").declined, true);
+  assert.equal(store.get("s2").declined, undefined, "another session is unaffected");
+});
+
+test("requestPermission refuses to invent a refusal it never received", async () => {
+  const store = new SessionStore();
+
+  const noTool = await requestPermission({ tools: ["read"], store, sessionId: "s1", callTool: async () => ({}) });
+  assert.equal(noTool, undefined);
+  assert.equal(store.get("s1").declined, undefined, "no tool is not a refusal");
+  assert.equal(store.size, 0, "and nothing is written");
+
+  const threw = await requestPermission({
+    tools: ["ask_user_question"],
+    store,
+    sessionId: "s1",
+    callTool: async () => {
+      throw new Error("no_ui");
+    },
+  });
+  assert.equal(threw, undefined);
+  assert.equal(store.get("s1").declined, undefined);
+
+  const noAnswers = await requestPermission({
+    tools: ["ask_user_question"],
+    store,
+    sessionId: "s1",
+    callTool: async () => ({ details: { nestedCalls: [{ name: "ask_user_question", arguments: { questions: [{ options: [{ label: "Keep it off" }] }] } }] } }),
+  });
+  assert.equal(noAnswers, undefined);
+  assert.equal(store.get("s1").declined, undefined, "its own prompt is not an answer");
 });
 
 test("normaliseAnswer ranks options and flags low confidence for escalation", () => {

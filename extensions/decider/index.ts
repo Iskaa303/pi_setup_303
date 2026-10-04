@@ -28,7 +28,7 @@ import {
   isChildSession,
   normaliseAnswer,
   post,
-  readGrant,
+  requestPermission,
   SessionStore,
   type State,
 } from "./logic.js";
@@ -63,8 +63,7 @@ function textResult(text: string) {
 
 function statusText(state: State, child: boolean): string {
   if (child) return "decider: off (subagent)";
-  if (state.declined && !state.enabled) return "decider: declined — /decider on to enable";
-  return state.enabled ? "decider: on" : "decider: off — /decider on";
+  return state.enabled ? "decider: on" : "decider: off";
 }
 
 export default function decider(pi: ExtensionAPI): void {
@@ -87,7 +86,12 @@ export default function decider(pi: ExtensionAPI): void {
       else if (command === "off") store.set(id, { enabled: false });
       else if (command === "reset") store.set(id, { enabled: false, declined: false });
       setStatus(ctx);
-      ctx.ui?.notify?.(statusText(store.get(id), isChildSession(ctx as never)), "info");
+      ctx.ui?.notify?.(
+        command === "status" || command === ""
+          ? `${statusText(store.get(id), isChildSession(ctx as never))} — /decider on | off | reset`
+          : `decider ${command === "reset" ? "reset" : command === "on" ? "on" : "off"}`,
+        "info",
+      );
     },
   });
 
@@ -118,7 +122,13 @@ export default function decider(pi: ExtensionAPI): void {
         // The model relays the answer back, so the user is never asked by us
         // directly and nothing is assumed on their behalf.
         if (params.permission === undefined) {
-          const asked = await askPermission(ctx, store, id);
+          const asked = await requestPermission({
+          tools: (ctx as unknown as { tools?: unknown }).tools,
+          store,
+          sessionId: id,
+          callTool: (name, params) => ctx.executeTool(name, params as never),
+          notify: (message) => ctx.ui?.notify?.(message, "info"),
+        });
           if (asked === undefined) {
             return textResult(
               "The local decision model is off and I cannot ask you from inside a tool. Ask the user with ask_user_question (\"load the local decision model (decider-4b, 4B params)?\", options \"Turn it on\" / \"Keep it off\"), then call system_one_decide again with permission: true or false. Do not retry without asking.",
@@ -185,40 +195,3 @@ export default function decider(pi: ExtensionAPI): void {
 }
 
 /** Ask once through rpiv-ask-user-question, remembering the answer for this session. */
-/**
- * Try to ask through rpiv-ask-user-question.
- * Returns undefined when no answer was obtained (so nothing is remembered),
- * true when the user said yes, false when they said no.
- */
-async function askPermission(ctx: ExtensionContext, store: SessionStore, sessionId: string): Promise<boolean | undefined> {
-  const tool = findAskTool(ctx as unknown as { tools?: unknown });
-  if (!tool) {
-    ctx.ui?.notify?.("decider is off until you say otherwise: /decider on, or answer when the model asks.", "warning");
-    return undefined;
-  }
-
-  let granted: boolean | undefined;
-  try {
-    const reply = await ctx.executeTool(tool, {
-      questions: [
-        {
-          header: "decider",
-          question: "The local decision model (decider-4b, 4B params) is off. Load it when you need routing or escalate-or-not decisions?",
-          options: [
-            { label: "Keep it off", description: "No model load, no extra battery. /decider on later if you change your mind." },
-            { label: "Turn it on", description: "Loads ~8GB of weights on first use and answers these calls." },
-          ],
-        },
-      ],
-    });
-    granted = readGrant(reply);
-  } catch (error) {
-    ctx.ui?.notify?.(`decider could not ask (${error instanceof Error ? error.message : String(error)}). It stays off; /decider on enables it.`, "warning");
-    return undefined;
-  }
-
-  if (granted === undefined) return undefined;
-  store.set(sessionId, granted ? { enabled: true, declined: false } : { enabled: false, declined: true, declinedAt: Date.now() });
-  ctx.ui?.notify?.(granted ? "decider enabled for this session" : "decider stays off for this session", granted ? "info" : "warning");
-  return granted;
-}
