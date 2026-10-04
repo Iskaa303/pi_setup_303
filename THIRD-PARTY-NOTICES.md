@@ -16,6 +16,17 @@ attribution. Each copy keeps its upstream `LICENSE` file in place.
 | @leo-alvarenga/pi-notify | https://github.com/leo-alvarenga/pi-mono (`npm:@leo-alvarenga/pi-notify`) | 0.2.11 | `npm` tarball, sha256 from `nix/locks/pi-notify.json` | MIT, © 2026 Leonardo A. Alvarenga |
 | @ff-labs/pi-fff | https://github.com/dmtrKovalenko/fff (`packages/pi-fff`) | 0.11.0 | `npm` tarball, sha256 from `nix/locks/pi-fff.json` | MIT, © 2026 ff-labs |
 
+My own extensions (`extensions/decider`, `extensions/attention-notify`) are
+written here. Two runtime dependencies they reach for are not vendored:
+
+| Project | Used for | License |
+|---|---|---|
+| [decider-4b](https://huggingface.co/mapika/decider-4b) / [Mapika/decider](https://github.com/Mapika/decider) | the local System One decision model behind the `decide` tool; `packages.decider-server` fetches the weights | Apache-2.0, © Mapika |
+| [Qwen3.5-4B-Base](https://huggingface.co/Qwen/Qwen3.5-4B-Base) | decider-4b's base model | Apache-2.0, © Alibaba |
+
+The notification chime in `nix/attention-sound.nix` is synthesised by ffmpeg at
+build time, so no third-party audio is redistributed here.
+
 All of these are MIT, so redistribution is allowed as long as the copyright
 notice and permission notice are kept. Each copy keeps its upstream `LICENSE`
 file, and copies of every license are collected under [`licenses/`](./licenses)

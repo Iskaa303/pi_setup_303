@@ -188,6 +188,14 @@
           depsHash = "sha256-50LPdwXkFuiatXMP8nxF7j4dd8Yue0hizK7ojAOnwwg=";
           prune = false;
         };
+        decider = {
+          src = ./extensions/decider;
+          version = "0.1.0";
+        };
+        attention-notify = {
+          src = ./extensions/attention-notify;
+          version = "0.1.0";
+        };
         pi-fff = {
           src = ./vendor/pi-fff;
           version = "0.11.0";
@@ -271,13 +279,15 @@
           ketch = pkgs.ketch;
           camoufox-js = mkCamoufoxJs pkgs;
           extensions = mkExtensionPkgs pkgs;
+          attentionSound = import ./nix/attention-sound.nix { inherit pkgs; };
+
           pi = pkgs.callPackage ./nix/pi.nix {
             version = piVersion;
             assets = piAssets;
           };
         in
         rec {
-          inherit ketch camoufox-js pi;
+          inherit ketch camoufox-js pi attentionSound;
 
           # All extensions in one output, for inspection or `pi install`.
           pi-setup = pkgs.symlinkJoin {
@@ -457,6 +467,8 @@
               };
               extraEnv = {
                 KETCH_BIN = "${cfg.ketch}/bin/ketch";
+                # attention-notify plays this generated chime instead of a system sound.
+                PI_ATTENTION_SOUND = "${own.attentionSound}";
               }
               // lib.optionalAttrs cfg.camoufox {
                 # The worker resolves camoufox-js from this directory.
@@ -474,15 +486,20 @@
 
       checks = forAllSystems (
         pkgs:
-        {
-          # Pure-logic tests: no npm, no network.
-          ketch-web-access-tests = pkgs.runCommand "ketch-web-access-tests" { nativeBuildInputs = [ pkgs.nodejs ]; } ''
-            cp -r ${./extensions/ketch-web-access} src
+        let
+          runTests = name: pkgs.runCommand "pi-${name}-tests" { nativeBuildInputs = [ pkgs.nodejs ]; } ''
+            cp -r ${./extensions/${name}} src
             chmod -R u+w src
             cd src
-            node --experimental-strip-types --test test/logic.test.ts
+            node --experimental-strip-types --test test/*.test.ts
             touch $out
           '';
+        in
+        {
+          # Pure-logic tests: no npm, no network.
+          ketch-web-access = runTests "ketch-web-access";
+          decider = runTests "decider";
+          attention-notify = runTests "attention-notify";
         }
       );
 
