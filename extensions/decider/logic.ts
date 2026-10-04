@@ -26,7 +26,9 @@ export interface DecisionAnswer {
   type: QuestionType;
   choice?: string;
   noul?: number;
-  score?: string;
+  score?: string | number;
+  /** score answers come back as a level index plus this level -> description map */
+  legend?: Record<string, string>;
   probabilities?: Record<string, number>;
   confidence?: number;
 }
@@ -115,8 +117,13 @@ export function normaliseAnswer(raw: Record<string, unknown>, threshold: number)
 
   const answer: DecisionAnswer = { type, probabilities: Object.fromEntries(ranked), confidence };
   if (answer.type === "noul") answer.noul = raw.noul as number;
-  else if (answer.type === "score") answer.score = (raw.score as string) ?? top?.[0];
-  else answer.choice = (raw.choice as string) ?? top?.[0];
+  else if (answer.type === "score") {
+    // The service returns the level index; the legend carries the words.
+    const level = (raw.score as number | string) ?? top?.[0];
+    const legend = (raw.legend ?? undefined) as Record<string, string> | undefined;
+    answer.score = level;
+    if (legend) answer.legend = legend;
+  } else answer.choice = (raw.choice as string) ?? top?.[0];
 
   return { answer, escalate: confidence < threshold };
 }

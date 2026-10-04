@@ -128,7 +128,8 @@ export default function decider(pi: ExtensionAPI): void {
       for (const [name, raw] of Object.entries(answers)) {
         const { answer, escalate } = normaliseAnswer(raw, limit);
         if (escalate) escalateCount += 1;
-        const value = answer.type === "noul" ? answer.noul : (answer.choice ?? answer.score);
+        const level = answer.legend ? `${answer.score} (${answer.legend[String(answer.score)] ?? "?"})` : answer.score;
+        const value = answer.type === "noul" ? answer.noul : (answer.choice ?? level);
         const options = Object.entries(answer.probabilities ?? {});
         rows.push(
           `- ${name}: ${value ?? "?"} (${((answer.confidence ?? 0) * 100).toFixed(0)}%${escalate ? ", escalate" : ""})` +

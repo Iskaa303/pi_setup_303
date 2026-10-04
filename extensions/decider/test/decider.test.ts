@@ -51,3 +51,12 @@ test("normaliseAnswer handles noul and score answers", () => {
   const score = normaliseAnswer({ type: "score", probabilities: { low: 0.1, high: 0.9 } }, 0.8);
   assert.equal(score.answer.score, "high");
 });
+
+test("normaliseAnswer keeps the score legend so levels can be rendered", () => {
+  const score = normaliseAnswer(
+    { type: "score", score: 2, confidence: 0.9, probabilities: { "0": 0.05, "1": 0.05, "2": 0.9 }, legend: { "0": "Low", "1": "Medium", "2": "Critical" } },
+    0.8,
+  );
+  assert.equal(score.answer.score, 2);
+  assert.equal(score.answer.legend?.["2"], "Critical");
+});
