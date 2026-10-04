@@ -62,7 +62,9 @@ deliberate edit of those two attributes plus `nix build .#pi --refresh`.
 | [@narumitw/pi-statusline](https://pi.dev/packages/@narumitw/pi-statusline) | the status line | MIT |
 | [@ff-labs/pi-fff](https://pi.dev/packages/@ff-labs/pi-fff) | fuzzy file and content search (`fffind`) | MIT |
 
-Not vendored, written here: [`extensions/ketch-web-access`](./extensions/ketch-web-access)
+Not vendored, written here, three extensions of my own:
+
+- [`extensions/ketch-web-access`](./extensions/ketch-web-access)
 replaces pi-web-access with Ketch as the only web provider, registering the
 `web_search`, `fetch_content`, `get_search_content`, and `source_check` tools
 that pi-subagents' `researcher` and `evidence-auditor` builtins require. Search
@@ -71,6 +73,15 @@ Ketch's readability pipeline, and hard pages can be fetched with
 [Camoufox](https://camoufox.com), a real anti-detect Firefox, through
 Playwright. It is derived from pi-web-access and pi-ketch, both MIT — see its
 README and `licenses/`.
+- [`extensions/decider`](./extensions/decider) — typed choice/noul/score
+  decisions from a local [decider-4b](https://huggingface.co/mapika/decider-4b)
+  (Apache-2.0). Off by default, imports no model runtime, asks the user for
+  permission through rpiv-ask-user-question the first time it is used, and never
+  loads inside subagents.
+- [`extensions/attention-notify`](./extensions/attention-notify) — a chime and a
+  desktop notification when a question is waiting for you or a subagent blocks
+  on you. The chime is synthesised by ffmpeg at build time, so no audio is
+  vendored.
 
 See [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md) for versions, commits,
 and upstream links, [licenses/](./licenses) for every license text, and
