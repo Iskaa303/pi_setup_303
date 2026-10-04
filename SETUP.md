@@ -89,6 +89,42 @@ depends on it.
 | `pi-subagents` | acorn, jiti, undici, yaml |
 | `pi-blackhole` | built with tsup during the build (`dist/` is not in the repo) |
 | `rpiv-ask-user-question`, `rpiv-todo` | `@juicesharp/rpiv-config`, typebox |
+| `pi-notify` | `@leo-alvarenga/pi-ext-core` and its deps |
+| `pi-statusline` | `@narumitw/pi-tui-kit` and its deps |
+| `feynman` | science-database / arXiv / HuggingFace clients; `pi-subagents` and `pi-web-access` are dropped on purpose, this repo supplies both |
+| `pi-fff` | `@ff-labs/fff-node`, `@ff-labs/fff-bun` |
+
+## Subagents and extensions
+
+Two things make packages cooperate here:
+
+- `settings.json` lists the `~/.pi/agent/extensions/<name>` symlink paths, not
+  only the store paths. pi resolves both routes to the same real path and loads
+  each extension once, but pi-subagents only discovers agents that ship inside a
+  package by reading `settings.json` — so feynman's `researcher`, `reviewer`,
+  `verifier` and `writer` become visible to it this way.
+- `settings.subagents.defaultSubagentOnlyExtensions` is set to the
+  `ketch-web-access` path: foreground children do not inherit the parent's
+  extensions, so the web tools have to be passed across the hop.
+
+`programs.pi-setup.researcher` is an agent definition written to
+`~/.pi/agent/agents/researcher.md`. User agents outrank package agents and
+builtins, so it is the `researcher` pi-subagents resolves: feynman's tool list
+plus a short prompt that delegates the long doctrine to feynman's skills
+(`deep-research`, `literature-review`, `research-review`, …). Set it to `null`
+to fall back to the packaged one.
+
+`programs.pi-setup.subagents` is merged under those defaults for anything else.
+
+To wire up a new extension the same way:
+
+1. Add it to `extensionSpecs` in `flake.nix` (with `lock` and `depsHash` if it
+   has npm deps; `./nix/pin-hashes.sh <name>` prints them).
+2. If it ships `pi.subagents.agents`, nothing else is needed — the symlink plus
+   the settings entry is what pi-subagents reads.
+3. If its prompts name providers `ketch-web-access` lacks (feynman's researcher
+   suggests `provider: "parallel-mcp"`), add an alias to `PROVIDER_ALIASES` in
+   the web extension so the value resolves instead of being rejected.
 
 ## Changing dependencies
 

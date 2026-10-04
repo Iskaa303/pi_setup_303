@@ -12,16 +12,26 @@ attribution. Each copy keeps its upstream `LICENSE` file in place.
 | @juicesharp/rpiv-ask-user-question | https://github.com/juicesharp/rpiv-mono (`packages/rpiv-ask-user-question`) | 2.11.0 | `d74b1c99830a565f3df3f37e0a36616d17ffc574` | MIT, © 2026 juicesharp |
 | @juicesharp/rpiv-todo | https://github.com/juicesharp/rpiv-mono (`packages/rpiv-todo`) | 2.11.0 | `d74b1c99830a565f3df3f37e0a36616d17ffc574` | MIT, © 2026 juicesharp |
 | @juicesharp/rpiv-config | https://github.com/juicesharp/rpiv-mono (`packages/rpiv-config`) | 2.11.0 | `d74b1c99830a565f3df3f37e0a36616d17ffc574` | MIT, © 2026 juicesharp |
+| [@narumitw/pi-statusline](https://pi.dev/packages/@narumitw/pi-statusline) | `npm` tarball, sha256 from `nix/locks/pi-statusline.json` | MIT, © 2026 narumiruna |
 | @leo-alvarenga/pi-notify | https://github.com/leo-alvarenga/pi-mono (`npm:@leo-alvarenga/pi-notify`) | 0.2.11 | `npm` tarball, sha256 from `nix/locks/pi-notify.json` | MIT, © 2026 Leonardo A. Alvarenga |
-| @narumitw/pi-statusline | https://github.com/narumiruna/pi-extensions (`packages/pi-statusline`) | 0.50.2 | `npm` tarball, sha256 from `nix/locks/pi-statusline.json` | MIT, © 2026 narumiruna |
+| @companion-ai/feynman | https://github.com/Companion-Inc/feynman (`npm:@companion-ai/feynman`) | 0.5.24 | `npm` tarball, sha256 from `nix/locks/feynman.json` | MIT, © 2026 Companion Inc. |
+| @ff-labs/pi-fff | https://github.com/dmtrKovalenko/fff (`packages/pi-fff`) | 0.11.0 | `npm` tarball, sha256 from `nix/locks/pi-fff.json` | MIT, © 2026 ff-labs |
 
 All of these are MIT, so redistribution is allowed as long as the copyright
 notice and permission notice are kept. Each copy keeps its upstream `LICENSE`
 file, and copies of every license are collected under [`licenses/`](./licenses)
 by `./nix/collect-licenses.sh`.
 
-`pi-notify` and `pi-statusline` are vendored from their published npm tarballs
-(no source repo checkout) so the built package matches exactly what npm ships.
+`pi-notify`, `pi-statusline`, `feynman` and `pi-fff` are vendored from their
+published npm tarballs (no source repo checkout) so the built package matches
+exactly what npm ships.
+
+`feynman` depends on `pi-subagents` and `pi-web-access`, but its pi extension
+never imports either: this repo already provides both, so the packaged tree
+drops those two dependency copies. Feynman therefore binds to this repo's
+`pi-subagents` (including its own `researcher`, `reviewer`, `verifier` and
+`writer` agents) and to `ketch-web-access` for `web_search` / `fetch_content` /
+`get_search_content`.
 
 `rpiv-ask-user-question` and `rpiv-todo` come from the `juicesharp/rpiv-mono`
 monorepo; only those two packages plus `rpiv-config` are vendored. Their

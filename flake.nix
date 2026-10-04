@@ -59,6 +59,7 @@
           depsHash ? null,
           build ? null,
           prune ? true,
+          dropDeps ? [ ],
         }:
         let
           # buildNpmPackage installs into $out/lib/node_modules/<name>; `pi
@@ -123,6 +124,11 @@
                 rm -rf "$out/node_modules/$name"
               done
             fi
+            # Dependencies this repo supplies itself, so a second copy must not
+            # ship inside the package.
+            for name in ${lib.concatStringsSep " " dropDeps}; do
+              rm -rf "$out/node_modules/$name"
+            done
           '';
         in
         pkgs.runCommand "pi-extension-${name}-${version}" {
@@ -181,6 +187,23 @@
           lock = ./nix/locks/pi-statusline.json;
           depsHash = "sha256-50LPdwXkFuiatXMP8nxF7j4dd8Yue0hizK7ojAOnwwg=";
           prune = false;
+        };
+        feynman = {
+          src = ./vendor/feynman;
+          version = "0.5.24";
+          lock = ./nix/locks/feynman.json;
+          depsHash = "sha256-AFFe69ibETI56Z3yAi5CXQ8ce/f8zCx38CGmIJq30mM=";
+          # pi-subagents and pi-web-access ship as feynman dependencies but the
+          # pi extension never imports them: this repo already provides both, and
+          # keeping them out of the tree stops a second copy from ever existing.
+          dropDeps = [ "pi-subagents" "pi-web-access" ];
+          prune = false;
+        };
+        pi-fff = {
+          src = ./vendor/pi-fff;
+          version = "0.11.0";
+          lock = ./nix/locks/pi-fff.json;
+          depsHash = "sha256-OJqIO+m6QMA4eHpAtvgJPXDpcRa6M8nTC4N7HO+Xq1g=";
         };
       };
 
@@ -291,6 +314,20 @@
         let
           cfg = config.programs.pi-setup;
           own = self.packages.${pkgs.stdenv.hostPlatform.system};
+
+          # pi-subagents needs the web tools passed explicitly: foreground
+          # children do not inherit the parent's extensions.
+          webExtension = "${own.ketch-web-access}";
+          webSubagents = { subagentOnlyExtensions = [ webExtension ]; };
+
+          # Merged under whatever the user put in programs.pi-setup.subagents.
+          subagentsSettings = {
+            defaultSubagentOnlyExtensions = [ webExtension ];
+            agentOverrides = {
+              researcher = webSubagents;
+              evidence-auditor = webSubagents;
+            };
+          } // cfg.subagents;
         in
         {
           # pi-flake supplies the programs.pi-coding-agent option surface; this
@@ -310,14 +347,49 @@
 
             extensions = lib.mkOption {
               type = lib.types.listOf lib.types.str;
-              default = [ ];
-              defaultText = lib.literalExpression ''"[]: pi auto-discovers ~/.pi/agent/extensions"'';
+              default = lib.optionalAttrs cfg.linkExtensions (
+                # pi-subagents only discovers package-provided agents from
+                # settings.json packages or npm dirs, never from
+                # ~/.pi/agent/extensions. Listing the symlink paths here makes
+                # pi-subagents see agents that ship inside a package (feynman's
+                # researcher/reviewer/verifier/writer). pi resolves both routes
+                # to the same real path and loads the extension once.
+                map (name: "${config.home.homeDirectory}/.pi/agent/extensions/${name}") extensionNames
+              );
+              defaultText = lib.literalExpression ''"the symlinked extension paths"'';
               description = ''
-                Pi package sources written into settings.json. Empty by
-                default, because the extension packages are symlinked into
-                ~/.pi/agent/extensions/<name> and pi discovers them there
-                under readable names. Set this only to add sources that are not
-                symlinked (npm:/git: work here).
+                Pi package sources written into settings.json. Defaults to the
+                symlinked paths under ~/.pi/agent/extensions, which is what
+                makes pi-subagents aware of agents that ship inside a package.
+                Add npm:/git: sources here for anything else.
+              '';
+            };
+
+            subagents = lib.mkOption {
+              type = lib.types.attrs;
+              default = { };
+              example = lib.literalExpression ''
+                {
+                  defaultModel = "stealth/space-bunny-alpha";
+                }
+              '';
+              description = ''
+                Merged into settings.json under `subagents`. The module fills in
+                what pi-subagents needs to work with the packages here —
+                foreground children do not inherit extensions, so
+                ketch-web-access is passed explicitly to every subagent, and to
+                the researcher/evidence-auditor builtins that require its tools.
+              '';
+            };
+
+            researcher = lib.mkOption {
+              type = lib.types.nullOr lib.types.lines;
+              default = builtins.readFile ./nix/agents/researcher.md;
+              description = ''
+                Agent definition written to ~/.pi/agent/agents/researcher.md.
+                User agents outrank package agents and builtins, so this is the
+                researcher pi-subagents resolves. Set to null to keep whichever
+                one the installed packages ship.
               '';
             };
 
@@ -372,20 +444,27 @@
 
             # ~/.pi/agent/extensions/<name> -> /nix/store/... so pi finds each
             # extension by its real name instead of a store hash.
-            home.file = lib.optionalAttrs cfg.linkExtensions (
-              lib.listToAttrs (
-                map (name: {
-                  name = ".pi/agent/extensions/${name}";
-                  value = { source = "${own.${name}}"; };
-                }) extensionNames
+            home.file =
+              lib.optionalAttrs cfg.linkExtensions (
+                lib.listToAttrs (
+                  map (name: {
+                    name = ".pi/agent/extensions/${name}";
+                    value = { source = "${own.${name}}"; };
+                  }) extensionNames
+                )
               )
-            );
+              // lib.optionalAttrs (cfg.researcher != null) {
+                # user agents outrank package agents and builtins
+                ".pi/agent/agents/researcher.md".text = cfg.researcher;
+              };
+
 
             programs.pi-coding-agent = {
               enable = true;
               package = cfg.pi;
               agentFiles.settings.value = cfg.settings // {
                 packages = cfg.extensions;
+                subagents = subagentsSettings;
               };
               extraEnv = {
                 KETCH_BIN = "${cfg.ketch}/bin/ketch";

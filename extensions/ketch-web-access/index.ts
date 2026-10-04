@@ -359,8 +359,23 @@ async function probeDuration(url: string, options: { cwd: string; signal?: Abort
 // ---------------------------------------------------------------------------
 
 const BACKENDS = ["brave", "ddg", "searxng", "exa", "firecrawl", "keenable"] as const;
+// Provider names other pi extensions' prompts tell the model to use. Ketch has
+// no equivalent, so they resolve to the configured default backend instead of
+// being rejected — a dead `provider:` value would otherwise stall the agent.
+const PROVIDER_ALIASES: Record<string, string | undefined> = {
+  "parallel-mcp": undefined,
+  duckduckgo: "ddg",
+  auto: undefined,
+  default: undefined,
+};
 const RECENCY = ["day", "week", "month", "year"] as const;
-const Backend = StringEnum(BACKENDS);
+const Backend = StringEnum([...BACKENDS, ...Object.keys(PROVIDER_ALIASES)]);
+
+/** Map a requested provider to a Ketch backend, honouring aliases. */
+function resolveBackend(provider: string | undefined): string | undefined {
+  if (provider === undefined) return undefined;
+  return provider in PROVIDER_ALIASES ? PROVIDER_ALIASES[provider] : provider;
+}
 
 const WebSearchParams = Type.Object({
   query: Type.Optional(Type.String({ description: "Single search query. Prefer `queries` with 2-4 varied angles for research." })),
@@ -458,8 +473,10 @@ export default function ketchWebAccess(pi: ExtensionAPI): void {
       async execute(_id, params: WebSearchArgs, signal, _update, ctx) {
         const queries = queriesFrom(params);
         if (!queries.length) return errorResult("Error: no query provided. Use `query` or `queries`.");
-        const backend = Array.isArray(params.provider) ? undefined : params.provider;
-        const federated = Array.isArray(params.provider) && params.provider.length ? params.provider : undefined;
+        const backend = Array.isArray(params.provider) ? undefined : resolveBackend(params.provider);
+        const federated = Array.isArray(params.provider) && params.provider.length
+          ? params.provider.map((provider) => resolveBackend(provider)).filter((value): value is string => Boolean(value))
+          : undefined;
 
         const collected: Array<{ query: string; results: SearchResult[] }> = [];
         const failures: string[] = [];
@@ -658,7 +675,7 @@ export default function ketchWebAccess(pi: ExtensionAPI): void {
         if (!claim) return errorResult("Error: 'claim' is required.");
         const queries = (params.queries?.length ? params.queries : [claim]).map((query) => query.trim()).filter(Boolean).slice(0, 8);
         const numResults = Math.min(20, Math.max(1, params.numResults ?? 5));
-        const backend = Array.isArray(params.provider) ? undefined : params.provider;
+        const backend = Array.isArray(params.provider) ? undefined : resolveBackend(params.provider);
 
         const byUrl = new Map<string, SearchResult>();
         const errors: Array<{ query: string; error: string }> = [];

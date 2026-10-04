@@ -60,6 +60,8 @@ deliberate edit of those two attributes plus `nix build .#pi --refresh`.
 | [@juicesharp/rpiv-todo](https://github.com/juicesharp/rpiv-mono) | todo list for the model, as a live overlay | MIT |
 | [@leo-alvarenga/pi-notify](https://pi.dev/packages/@leo-alvarenga/pi-notify) | desktop notifications when the agent needs you | MIT |
 | [@narumitw/pi-statusline](https://pi.dev/packages/@narumitw/pi-statusline) | the status line | MIT |
+| [@companion-ai/feynman](https://pi.dev/packages/@companion-ai/feynman) | research agent: science-database tools (Semantic Scholar, arXiv, PubMed, OpenAlex), alphaXiv, HuggingFace, and researcher/reviewer/verifier/writer subagents | MIT |
+| [@ff-labs/pi-fff](https://pi.dev/packages/@ff-labs/pi-fff) | fuzzy file and content search (`fffind`) | MIT |
 
 Not vendored, written here: [`extensions/ketch-web-access`](./extensions/ketch-web-access)
 replaces pi-web-access with Ketch as the only web provider, registering the
