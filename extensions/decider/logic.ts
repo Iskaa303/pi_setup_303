@@ -143,6 +143,24 @@ export async function post(url: string, payload: unknown, timeoutMs = 120_000): 
 }
 
 /** Normalise whatever the service returned into an answer plus an escalate flag. */
+/**
+ * What to tell the model when the service is not answering. Pointing at
+ * `systemctl --user start decider` on a machine that never installed the unit
+ * sends the model hunting for a service that does not exist.
+ */
+export function unreachableAdvice(unitInstalled: boolean, url: string, detail: string): string {
+  const where = `decider service unreachable at ${url} (${detail})`;
+  if (!unitInstalled) {
+    return `${where}. This machine has no decider.service: the extension is only an HTTP client and the server (4B weights plus a torch runtime) is a separate, optional deploy — see SETUP.md "Decider weights". Do not try to install or start it here. Decide without it.`;
+  }
+  return `${where}. Start it with: systemctl --user start decider. Decide without it.`;
+}
+
+/** Whether the user has a decider.service unit at all. One cheap spawn, failure path only. */
+export function deciderUnitInstalled(listUnitFiles: string): boolean {
+  return /^decider\.service\b/m.test(listUnitFiles);
+}
+
 export function normaliseAnswer(raw: Record<string, unknown>, threshold: number): { answer: DecisionAnswer; escalate: boolean } {
   const type = (raw.type as QuestionType) ?? "choice";
   const probabilities = (raw.probabilities ?? raw.probs ?? {}) as Record<string, number>;

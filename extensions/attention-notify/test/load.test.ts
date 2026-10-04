@@ -12,14 +12,16 @@ test("the extension module loads and registers its tool and command", () => {
   assert.equal(typeof extension, "function");
 
   const registered: string[] = [];
+  const hooks: string[] = [];
   const pi = {
     registerTool: (tool: { name?: string }) => registered.push(`tool:${tool?.name ?? "?"}`),
     registerCommand: (name: string) => registered.push(`command:${name}`),
-    on: () => {},
+    on: (event: string) => hooks.push(event),
     events: { on: () => {} },
   };
 
   extension(pi as never);
 
   assert.deepEqual(registered, ["tool:notify_user", "command:attention-sound"]);
+  assert.equal(hooks.filter((h) => h === "tool_call").length, 2, "both tool_call hooks must be registered");
 });

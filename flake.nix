@@ -449,7 +449,10 @@
           };
 
           config = lib.mkIf cfg.enable {
-            home.packages = [ cfg.ketch ] ++ lib.optionals cfg.videoTools [ pkgs.ffmpeg pkgs.yt-dlp ];
+            # libnotify gives notify-send: pi-notify and attention-notify both
+            # shell out to it for desktop notifications, and NixOS ships no
+            # notifier by default, so without this nothing is ever notified.
+            home.packages = [ cfg.ketch pkgs.libnotify ] ++ lib.optionals cfg.videoTools [ pkgs.ffmpeg pkgs.yt-dlp ];
 
             # ~/.pi/agent/extensions/<name> -> /nix/store/... so pi finds each
             # extension by its real name instead of a store hash.

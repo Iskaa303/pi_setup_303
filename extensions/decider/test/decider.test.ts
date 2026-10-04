@@ -1,7 +1,21 @@
 // Run: node --experimental-strip-types --test test/decider.test.ts
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { findAskTool, normaliseAnswer, permissionPrompt, SessionStore } from "../logic.ts";
+import { deciderUnitInstalled, findAskTool, normaliseAnswer, permissionPrompt, SessionStore, unreachableAdvice } from "../logic.ts";
+
+test("an unreachable service never points at a unit that does not exist", () => {
+  const missing = unreachableAdvice(false, "http://127.0.0.1:8137/v1/systemone", "curl: (7) Failed to connect");
+  assert.match(missing, /no decider\.service/);
+  assert.doesNotMatch(missing, /systemctl --user start decider/, "a missing unit must not be named as a fix");
+  assert.match(missing, /decide without it/i);
+
+  const installed = unreachableAdvice(true, "http://127.0.0.1:8137/v1/systemone", "exit 1");
+  assert.match(installed, /systemctl --user start decider/);
+
+  assert.equal(deciderUnitInstalled("UNIT FILE STATE\n"), false);
+  assert.equal(deciderUnitInstalled("UNIT FILE      STATE    PRESET\ndecider.service enabled enabled\n"), true);
+  assert.equal(deciderUnitInstalled("decider.servicefoo.service enabled\n"), false, "substring must not match");
+});
 
 test("a session starts off and nothing has been decided yet", () => {
   const store = new SessionStore();

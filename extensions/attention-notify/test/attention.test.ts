@@ -1,9 +1,20 @@
 // Run: node --experimental-strip-types --test test/*.test.ts
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { decideSound, shouldNotify, type Trigger } from "../logic.ts";
+import { decideSound, questionTrigger, shouldNotify, subagentTrigger, type Trigger } from "../logic.ts";
 
 const trigger: Trigger = { kind: "question", summary: "pi is asking you a question" };
+
+test("an ask-user tool call is the trigger to notify on", () => {
+  // This predicate used to live in index.ts, where no test ever ran it.
+  assert.deepEqual(questionTrigger({ toolName: "ask_user_question" }), trigger);
+  assert.deepEqual(questionTrigger({ tool_name: "ask_user_question" }), trigger);
+  assert.equal(questionTrigger({ toolName: "bash" }), undefined, "ordinary tools must stay quiet");
+  assert.equal(questionTrigger({}), undefined);
+
+  assert.ok(subagentTrigger({ toolName: "subagent", arguments: { mode: "ask_user_question" } }));
+  assert.equal(subagentTrigger({ toolName: "subagent", arguments: { mode: "review" } }), undefined);
+});
 
 test("shouldNotify rate-limits repeats inside the window", () => {
   const fired = new Map<string, number>();

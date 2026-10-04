@@ -23,7 +23,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { Type, type Static } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { decideSound, notify, shouldNotify, type Trigger } from "./logic.js";
+import { decideSound, notify, questionTrigger, shouldNotify, subagentTrigger, type Trigger } from "./logic.js";
 
 const PingParams = Type.Object({
   summary: Type.String({ description: "One line saying what needs you." }),
@@ -42,10 +42,8 @@ export default function attentionNotify(pi: ExtensionAPI): void {
   // A question asked of the user. Fires on tool_call so the notification lands
   // while the question is on screen, not after it is answered.
   pi.on("tool_call", (event) => {
-    const tool = (event as { toolName?: string; tool_name?: string }).toolName ?? (event as { tool_name?: string }).tool_name ?? "";
-    if (!/ask[_-]?user|question/i.test(tool)) return;
-    const summary = "pi is asking you a question";
-    const trigger: Trigger = { kind: "question", summary };
+    const trigger = questionTrigger(event);
+    if (!trigger) return;
     if (!shouldNotify(trigger, fired, 30_000)) return;
     void notify(trigger, sound);
   });
@@ -53,11 +51,8 @@ export default function attentionNotify(pi: ExtensionAPI): void {
   // A subagent that needs a human: pi-subagents surfaces these as tool calls
   // and as notifications, so watch both shapes.
   pi.on("tool_call", (event) => {
-    const name = (event as { toolName?: string }).toolName ?? "";
-    if (!/subagent/i.test(name)) return;
-    const args = JSON.stringify((event as { arguments?: unknown }).arguments ?? "");
-    if (!/ask[_-]?user|question|permission|approve|confirm/i.test(args)) return;
-    const trigger: Trigger = { kind: "subagent", summary: "A subagent needs your input" };
+    const trigger = subagentTrigger(event);
+    if (!trigger) return;
     if (!shouldNotify(trigger, fired, 60_000)) return;
     void notify(trigger, sound);
   });

@@ -222,8 +222,7 @@ async function camoufoxPages(
 ): Promise<StoredPage[]> {
   const report = await camoufoxReport();
   if (!report.ok) {
-    const detail = [report.error, report.install_hint].filter(Boolean).join(" — ");
-    throw new Error(`Camoufox engine unavailable: ${detail || "unknown reason"}. Use engine "ketch", or run: npm install camoufox-js && npx camoufox-js fetch`);
+    throw new Error(`Camoufox engine unavailable: ${camoufoxAdvice(report)}. Until then use engine "ketch".`);
   }
   const run = await runBinary(
     NODE,
@@ -849,7 +848,15 @@ export default function ketchWebAccess(pi: ExtensionAPI): void {
       async execute(_id, params: BrowserArgs, signal, _update, ctx) {
         if (params.engine === "camoufox") {
           const report = await camoufoxReport();
-          const text = params.action === "install" ? `${report.ok ? "already installed" : "not installed"}: ${JSON.stringify(report, null, 2)}` : JSON.stringify(report, null, 2);
+          // The worker's own install_hint says "npm install camoufox-js", which is
+          // wrong on nix: the client is already in the store. Show our advice
+          // instead, or the model follows the hint and creates a second copy.
+          const { install_hint: _workerHint, ...flags } = report;
+          const payload = { ...flags, advice: camoufoxAdvice(report) };
+          const text =
+            params.action === "install" && !report.ok
+              ? JSON.stringify(payload, null, 2)
+              : `${params.action}: camoufox: ${report.ok ? "ready" : "not ready"} — ${camoufoxAdvice(report)}\n${JSON.stringify(payload, null, 2)}`;
           return { content: [{ type: "text" as const, text }], details: { engine: "camoufox", action: params.action, report } };
         }
         const run = await runKetch(["browser", params.action, "--json"], {

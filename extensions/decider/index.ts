@@ -15,20 +15,24 @@
  *   - a refusal is permanent until `/decider on`
  *   - subagents never load it: a child session has no user to ask
  *
- * The model runs as a separate service (`packages.decider-server`); this
- * extension only speaks HTTP, so an unreachable server costs nothing.
+ * The model runs as a separate service that this flake does **not** ship; this
+ * extension only speaks HTTP, so an unreachable server costs nothing. Say so
+ * truthfully rather than pointing at a systemd unit the machine may not have.
  */
 
+import { spawnSync } from "node:child_process";
 import { Type, type Static } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_PATH,
   DEFAULT_URL,
+  deciderUnitInstalled,
   isChildSession,
   normaliseAnswer,
   permissionPrompt,
   post,
   SessionStore,
+  unreachableAdvice,
   type State,
 } from "./logic.js";
 
@@ -141,8 +145,9 @@ export default function decider(pi: ExtensionAPI): void {
         180_000,
       );
       if (reply.error || reply.status !== 0) {
+        const units = spawnSync("systemctl", ["--user", "list-unit-files", "decider.service"], { encoding: "utf8" }).stdout ?? "";
         return textResult(
-          `decider service unreachable at ${url()} (${reply.error ?? `exit ${reply.status}`}). Start it with: systemctl --user start decider. Decide without it.`,
+          unreachableAdvice(deciderUnitInstalled(units), url(), reply.error ?? `exit ${reply.status}`),
         );
       }
 

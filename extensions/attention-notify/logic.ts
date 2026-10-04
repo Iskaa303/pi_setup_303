@@ -43,6 +43,30 @@ export function decideSound(env: NodeJS.ProcessEnv = process.env): SoundChoice |
   return undefined;
 }
 
+/** pi reports the tool in `toolName`; be tolerant about the shape. */
+export function toolNameOf(event: unknown): string {
+  const e = event as { toolName?: unknown; tool_name?: unknown; name?: unknown } | null;
+  const name = [e?.toolName, e?.tool_name, e?.name].find((v) => typeof v === "string" && v);
+  return typeof name === "string" ? name : "";
+}
+
+/**
+ * The moments where the *user* is the bottleneck. Pure so they can be tested:
+ * this used to live in index.ts, where nothing ran it.
+ */
+export function questionTrigger(event: unknown): Trigger | undefined {
+  if (!/ask[_-]?user|question/i.test(toolNameOf(event))) return undefined;
+  return { kind: "question", summary: "pi is asking you a question" };
+}
+
+/** A subagent blocked on a human: the subagent tool plus a question in its args. */
+export function subagentTrigger(event: unknown): Trigger | undefined {
+  if (!/subagent/i.test(toolNameOf(event))) return undefined;
+  const args = JSON.stringify((event as { arguments?: unknown } | null)?.arguments ?? "");
+  if (!/ask[_-]?user|question|permission|approve|confirm/i.test(args)) return undefined;
+  return { kind: "subagent", summary: "A subagent needs your input" };
+}
+
 /** Rate-limit repeats so a retry loop does not machine-gun the user. */
 export function shouldNotify(trigger: Trigger, store: Map<string, number>, windowMs: number, now = Date.now()): boolean {
   const key = `${trigger.kind}:${trigger.summary}`;
