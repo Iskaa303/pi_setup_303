@@ -74,10 +74,10 @@ Ketch's readability pipeline, and hard pages can be fetched with
 Playwright. It is derived from pi-web-access and pi-ketch, both MIT — see its
 README and `licenses/`.
 - [`extensions/decider`](./extensions/decider) — typed choice/noul/score
-  decisions from a local [decider-4b](https://huggingface.co/mapika/decider-4b)
-  (Apache-2.0). Off by default, imports no model runtime, asks the user for
-  permission through rpiv-ask-user-question the first time it is used, and never
-  loads inside subagents.
+  decisions from any service that answers `POST /v1/systemone`, such as
+  [Mapika/decider](https://github.com/Mapika/decider) (Apache-2.0). Ships no
+  model and no runtime: the extension is an HTTP client, so with nothing
+  listening it reports the URL that did not answer and gets out of the way.
 - [`extensions/attention-notify`](./extensions/attention-notify) — a chime and a
   desktop notification when a question is waiting for you or a subagent blocks
   on you. The chime is synthesised by ffmpeg at build time, so no audio is

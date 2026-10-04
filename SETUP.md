@@ -115,72 +115,43 @@ binary is missing from ~/.cache/camoufox" and suggests `npx camoufox-js fetch`
 — deliberately not `npm install camoufox-js`, which would shadow the nix client
 with a second, divergent copy.
 
-## Decider weights
+## Decider
 
-`extensions/decider` only speaks HTTP, so the model can live anywhere that
-answers the Jev wire protocol. decider's own server is exactly that contract
-(`POST /v1/systemone` with `{state, questions}` → `{answers: {...}}`), so it
-plugs in unchanged.
+`extensions/decider` is an HTTP client and nothing else. It POSTs typed questions to
+`${DECIDER_URL:-http://127.0.0.1:8137}/v1/systemone` and renders the probabilities it
+gets back. There is no model, no weights and no runtime in this repo: if that URL
+answers, `system_one_decide` works, and when it does not, the tool says so and gets
+out of the way. No `/decider` command, no on/off state, no permission prompt — there
+is nothing here to switch off.
 
-Weights come from the Hub as a **whole repo folder**, not a single file — `decider.infer.Decider(path)`
-and `decider.serve` read `decider_config.json` and the letter rows from the snapshot, so `fetchurl`-ing
-`model.safetensors` does not work. The Hub repo is itself a git repo, so pin the revision in nix:
-
-```nix
-# rev: the commit sha shown by `git ls-remote https://huggingface.co/Mapika/decider-2b refs/heads/main`
-packages.decider-2b = pkgs.fetchgit {
-  url = "https://huggingface.co/Mapika/decider-2b";
-  rev = "<40-char sha>";
-  hash = "sha256-…";   # nix build .#decider-2b --refresh
-};
-```
-
-Pick the size that fits the GPU, not the headline number:
-
-|model|bf16 weights|notes|
+| variable | default | meaning |
 |---|---|---|
-|[decider-0.8b](https://huggingface.co/Mapika/decider-0.8b)|1.4 GB|routing and yes/no, within 1–4 points of the 2B|
-|[decider-2b](https://huggingface.co/Mapika/decider-2b)|3.8 GB|the authors' default: routing, classification, judgments, browser agents|
-|decider-4b|8.4 GB|does not fit an 8 GB laptop card in bf16|
+| `DECIDER_URL` | `http://127.0.0.1:8137` | where the service lives |
+| `DECIDER_PATH` | `/v1/systemone` | endpoint |
+| `DECIDER_MODEL` | `decider` | model name sent in the request |
+| `DECIDER_THRESHOLD` | `0.8` | below this an answer is flagged `escalate` |
 
-## Running it
+Any server that answers the contract works, including
+[Mapika/decider](https://github.com/Mapika/decider)'s own `decider.serve`:
 
-```nix
-programs.pi-setup = {
-  enable = true;
-  decider = true;        # the only thing this needs; everything else is default
-};
+```
+POST /v1/systemone
+{"state": "<text>", "questions": {"<id>": {"type": "choice", "instructions": "...",
+                                        "criteria": {"<option>": "<description>"}}}}
+→ {"answers": {"<id>": {"type": "choice", "choice": "<option>", "confidence": 0.8,
+                         "probabilities": {"<option>": 0.8, ...}}}}
 ```
 
-That writes a `decider.service` user unit — `uvicorn decider.serve:app` on
-`127.0.0.1:8137` with `DECIDER_MODEL` pointing at the snapshot — and sets
-`DECIDER_MODEL=decider-2b` for the extension. Off by default, and turning it off
-is complete: no unit, no CUDA packages referenced, and the 3.8 GB snapshot is
-never fetched, so the same config works on a laptop with no GPU.
+`score` answers carry a level plus a `legend` of level → description; `noul` answers
+return the probability directly.
 
-```sh
-systemctl --user start decider
-curl -s localhost:8137/v1/systemone -H 'content-type: application/json' \
-  -d '{"state":"which tool should I use?","questions":{"route":{"type":"choice",
-       "criteria":{"web":"needs the network","code":"touches the repo"}}}}'
-```
-
-Then `/decider on` in pi and `system_one_decide` answers. `/decider off` keeps the
-service loaded but stops the extension using it — the reverse of stopping the
-service, which the extension notices as unreachable.
-
-The extension is deliberately decoupled: it is only an HTTP client, so with nothing deployed it
-loads no weights, and it now says so plainly instead of pointing at a systemd unit that does not
-exist.
-
-The runtime is `torch` (CUDA build) + `transformers>=5` + `flash-linear-attention`, which the
-module assembles for you — CUDA torch is unfree, so the flake does its own
-`config.allowUnfree = true` nixpkgs import for that one derivation instead of
-asking you to allow unfree system-wide.
-
-```bash
-python -m decider.serve --model /nix/store/…-decider-2b --port 8137   # or: uvicorn decider.serve:app
-```
+Build the model yourself as its own package. Two notes from doing it once: the Hub
+repo is a git repo holding `model.safetensors` through LFS, so `fetchgit` needs
+`fetchLFS = true` or you get pointer files; and CUDA torch is unfree, so it wants its
+own `config.allowUnfree = true` nixpkgs import rather than `nixos.config.allowUnfree`.
+Sizes for reference: [decider-0.8b](https://huggingface.co/Mapika/decider-0.8b) 1.4 GB,
+[decider-2b](https://huggingface.co/Mapika/decider-2b) 3.8 GB (the authors' default for
+routing and judgments), decider-4b 8.4 GB bf16, which does not fit an 8 GB laptop card.
 
 ## Subagents and extensions
 

@@ -1,83 +1,66 @@
 # decider
 
-Local System One decisions for pi, **off by default**.
+Typed System One decisions for pi, over HTTP.
 
-[decider-4b](https://huggingface.co/mapika/decider-4b) (Mapika, Apache-2.0) is a
-4B dense model fine-tuned from Qwen3.5-4B-Base that does not generate text. You
-give it a state and typed questions — `choice`, `noul`, `score` — and it returns
-a probability distribution over the options for every question **from one forward
-pass**. It is the local, open equivalent of TypeSafe's paid Jev (which needs an
-API key and therefore does not belong in this setup).
+[decider](https://github.com/Mapika/decider) (Mapika, Apache-2.0) is a family of
+dense models fine-tuned from Qwen3.5 that do not generate text. You give one a
+state and typed questions — `choice`, `noul`, `score` — and it returns a
+probability distribution over the options for every question **from one forward
+pass**. It is the open equivalent of TypeSafe's paid Jev, which needs an API key
+and therefore does not belong in this setup.
 
-On JevBench's public hard tier decider reaches **0.676** where von reaches 0.373
-and Laya 0.341 — the 400M encoders are the weakest serious entry in this class.
+## This extension is a client, and only a client
 
-## Why it is off by default
+It ships no model, no weights and no runtime. It POSTs to
+`http://127.0.0.1:8137/v1/systemone` (override with `DECIDER_URL`) and renders
+whatever comes back. That means:
 
-A 4B model on a laptop is not something to spin up because a tool name appeared
-in context. So:
+- **no `/decider` command and no on/off state** — there is nothing here to switch
+  off. Whether the model is loaded is the service's business, not pi's.
+- **no permission prompt** — a call to an HTTP endpoint does not need the user to
+  approve it first, and the old gate only ever added a turn and a place to
+  record an answer nobody gave.
+- **no status line** — `decider: on` described a switch that no longer exists.
+- **subagents may use it** — it is an ordinary remote call, and a child session
+  asking "does this need the web?" is exactly the routing question it is for.
+- an unreachable service costs nothing: no weights, no memory, no VRAM, just a
+  note naming the URL that did not answer
 
-- the extension imports **no model runtime**; it only speaks HTTP to a service
-- the first `decide` call asks the user for permission, through
-  [rpiv-ask-user-question](../vendor/rpiv-mono/packages/rpiv-ask-user-question)
-  when it is loaded, and remembers the answer either way
-- a refusal is remembered for the rest of **that session**; the next session
-  asks afresh
-- **no answer is never treated as a no**: if the question cannot be asked,
-  nothing is remembered and the model is told to ask the user itself
-- **subagents never load it**: a child session has no user to ask, so `decide`
-  returns "unavailable, decide without it"
-- an unreachable service costs nothing — no weights, no memory, just a note
+## Environment
 
-## Commands
-
-| Command | Effect |
-|---|---|
-| `/decider` or `/decider status` | show whether it is on, off or declined |
-| `/decider on` | enable it and load weights on the next `decide` |
-| `/decider off` | disable without forgetting the refusal |
-| `/decider reset` | clear the refusal so the next call asks again |
-
-The status line shows `decider: on` or `decider: off` through
-[pi-statusline](../vendor/pi-statusline)'s extension-status row.
+| variable | default | meaning |
+|---|---|---|
+| `DECIDER_URL` | `http://127.0.0.1:8137` | where the service lives |
+| `DECIDER_PATH` | `/v1/systemone` | endpoint |
+| `DECIDER_MODEL` | `decider` | model name sent in the request |
+| `DECIDER_THRESHOLD` | `0.8` | below this an answer is flagged `escalate` |
 
 ## The tool
 
-It is called `system_one_decide`, not `decide` and not `decider` (the extension
-is `decider`, the tool is `system_one_decide` — an earlier build shipped it as
-`decide`, which read as too close to the extension name and got called
-wrong).
+`system_one_decide` — the extension is `decider`, the tool is not, and that
+difference has caused a wasted detour before, so the prompt snippet says so.
 
-```jsonc
-// one call, several questions, one forward pass
-system_one_decide({
-  state: "Tool 'ketch_browser' is not a browser… /tmp/x 404 …",
-  questions: {
-    route:  { type: "choice", instructions: "How should this be handled?",
-              criteria: { fetch_tool: "use fetch_content", ask_user: "ask the user" } },
-    urgent: { type: "noul",  instructions: "Is the user blocked?" }
-  },
-  threshold: 0.8
-})
+One call, several questions, so they share a single forward pass:
+
+```json
+{
+  "state": "the text the decision is about",
+  "questions": [
+    { "name": "route", "type": "choice", "instructions": "...",
+      "criteria": { "web": "needs the network", "code": "touches the repo" } }
+  ]
+}
 ```
 
-Answers below `threshold` (default 0.8, `DECIDER_THRESHOLD`) come back marked
-`escalate`: that is a signal to verify, not a fact. The tool's own guidance
-says the same — it has no access to the conversation.
+`criteria` is an object of option → description for `choice`, `{true, false}` for
+`noul`, and a **list of level descriptions** for `score`. Give every option a
+real description: bare labels give the model nothing to score.
 
-## The service
+Answers come back as `- name: value (NN%, escalate)` plus the full option
+distribution, and any answer under the threshold is flagged so the model verifies
+it against the text instead of trusting it.
 
-The extension expects an HTTP service (von-compatible `/v1/systemone` by
-default, override with `DECIDER_URL` / `DECIDER_PATH`).
+## Building the service
 
-On/off state is **session-scoped and in memory**: it is keyed by session id and
-dropped on `session_shutdown`. Nothing is written to `~/.pi`, so starting a new
-session means a fresh decision — which is the point, because "am I willing to
-spend battery on this" is a question about the conversation you are in, not a
-global preference. `/reload` also resets it.
-
-## Attribution
-
-Uses [decider-4b](https://huggingface.co/mapika/decider-4b) (Apache-2.0) and
-[Mapika/decider](https://github.com/Mapika/decider) (Apache-2.0) at runtime.
-Neither is vendored here.
+Not part of this repo — see [SETUP.md](../../SETUP.md) for the wire contract and
+the two nix gotchas (Hub LFS needs `fetchLFS`; CUDA torch is unfree).

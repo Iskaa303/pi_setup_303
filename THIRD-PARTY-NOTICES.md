@@ -21,8 +21,7 @@ written here. Two runtime dependencies they reach for are not vendored:
 
 | Project | Used for | License |
 |---|---|---|
-| [decider-4b](https://huggingface.co/mapika/decider-4b) / [Mapika/decider](https://github.com/Mapika/decider) | the local System One decision model behind the `decide` tool; `packages.decider-server` fetches the weights | Apache-2.0, © Mapika |
-| [Qwen3.5-4B-Base](https://huggingface.co/Qwen/Qwen3.5-4B-Base) | decider-4b's base model | Apache-2.0, © Alibaba |
+| [Mapika/decider](https://github.com/Mapika/decider) | the System One decision service `extensions/decider` talks to. Not vendored and not fetched: the extension is an HTTP client, and the model is your own package to build | Apache-2.0, © Mapika |
 
 The notification chime in `nix/attention-sound.nix` is synthesised by ffmpeg at
 build time, so no third-party audio is redistributed here.

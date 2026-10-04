@@ -1,14 +1,18 @@
 /**
- * Pure logic for the decider extension: per-session state, the HTTP call, and
- * answer normalisation. Kept free of pi and typebox imports so it can be
- * unit-tested directly.
+ * Pure logic for the decider extension: the HTTP call, answer normalisation,
+ * and what to say when nothing answers. Kept free of pi and typebox imports so
+ * it can be unit-tested directly.
+ *
+ * There is deliberately no state here. The extension is a client for whatever
+ * answers POST /v1/systemone; if that URL answers, the tool works, and if it
+ * does not, the tool says so and gets out of the way. No gate, no weights, no
+ * on/off — those belonged to a model this repo does not ship.
  */
 
 import { spawn } from "node:child_process";
 
 const DEFAULT_URL = "http://127.0.0.1:8137";
 const DEFAULT_PATH = "/v1/systemone";
-const ASK_TOOLS = ["ask_user_question", "ask-user-question", "ask_user"];
 
 export type QuestionType = "choice" | "noul" | "score";
 
@@ -28,82 +32,6 @@ export interface DecisionAnswer {
   legend?: Record<string, string>;
   probabilities?: Record<string, number>;
   confidence?: number;
-}
-
-export interface State {
-  enabled: boolean;
-  /** set once the user has answered the permission question; not asked again */
-  declined?: boolean;
-  declinedAt?: number;
-}
-
-/**
- * On/off is a session decision, not a global preference: whether to spend
- * battery on a 4B model belongs to the conversation you are in right now.
- * So the state lives in this process, keyed by session id, and is dropped when
- * the session ends. A refusal is remembered for the rest of that session and
- * forgotten by the next one — nothing is written to ~/.pi.
- */
-export class SessionStore {
-  private readonly states = new Map<string, State>();
-
-  get(sessionId: string): State {
-    return { enabled: false, ...this.states.get(sessionId) };
-  }
-
-  set(sessionId: string, patch: State): State {
-    const next = { ...this.get(sessionId), ...patch };
-    this.states.set(sessionId, next);
-    return next;
-  }
-
-  drop(sessionId: string): void {
-    this.states.delete(sessionId);
-  }
-
-  get size(): number {
-    return this.states.size;
-  }
-}
-
-/** A child subagent session cannot ask the user anything, so never gate on it. */
-export function isChildSession(ctx: { sessionManager?: unknown }): boolean {
-  const session = ctx.sessionManager as { getParentSessionId?: () => string | null } | undefined;
-  return Boolean(session?.getParentSessionId?.());
-}
-
-export function findAskTool(ctx: { tools?: unknown }): string | undefined {
-  // ctx.tools is not guaranteed to be a list of plain strings — accept either
-  // "name" or { name } entries, because guessing wrong here means the user is
-  // never asked anything.
-  const entries = (ctx.tools ?? []) as Array<string | { name?: string }>;
-  const names = entries.map((entry) => (typeof entry === "string" ? entry : (entry?.name ?? "")));
-  return ASK_TOOLS.find((candidate) => names.includes(candidate));
-}
-
-export const PERMISSION_QUESTION = {
-  header: "decider",
-  question: "The local decision model (decider-4b, 4B params) is off. Load it when you need routing or escalate-or-not decisions?",
-  options: [
-    { label: "Keep it off", description: "No model load, no extra battery. /decider on later if you change your mind." },
-    { label: "Turn it on", description: "Loads ~8GB of weights on first use and answers these calls." },
-  ],
-};
-
-/**
- * What to tell the model when it needs the user's permission.
- *
- * The question is always asked by the *model*, never from inside this tool: a
- * nested `ctx.executeTool("ask_user_question", …)` returns without rendering a
- * question (rpiv's own handler bails on `ctx.hasUI`), so calling it here only
- * cost a dead turn and produced a misleading "I cannot ask you" message.
- */
-export function permissionPrompt(tools: unknown): string {
-  const askTool = findAskTool({ tools });
-  if (askTool) {
-    return `Ask the user with ${askTool}: question "${PERMISSION_QUESTION.question}", options "Turn it on" / "Keep it off". Then call system_one_decide again with permission: true or false. Do not retry without asking.`;
-  }
-  return `Ask the user directly: "${PERMISSION_QUESTION.question}" — offer "Turn it on" / "Keep it off". Then call system_one_decide again with permission: true or false. Do not retry without asking.`;
 }
 
 export interface HttpReply {
@@ -142,25 +70,16 @@ export async function post(url: string, payload: unknown, timeoutMs = 120_000): 
   });
 }
 
-/** Normalise whatever the service returned into an answer plus an escalate flag. */
 /**
- * What to tell the model when the service is not answering. Pointing at
- * `systemctl --user start decider` on a machine that never installed the unit
- * sends the model hunting for a service that does not exist.
+ * What to tell the model when the URL does not answer. Name the endpoint and
+ * stop: the service is somebody else's to start, and this extension ships no
+ * model, so there is nothing here to retry or repair.
  */
-export function unreachableAdvice(unitInstalled: boolean, url: string, detail: string): string {
-  const where = `decider service unreachable at ${url} (${detail})`;
-  if (!unitInstalled) {
-    return `${where}. This machine has no decider.service: the extension is only an HTTP client and the server (4B weights plus a torch runtime) is a separate, optional deploy — see SETUP.md "Decider weights". Do not try to install or start it here. Decide without it.`;
-  }
-  return `${where}. Start it with: systemctl --user start decider. Decide without it.`;
+export function unreachableText(url: string, detail: string): string {
+  return `No decider service at ${url} (${detail}). This extension is only an HTTP client and ships no model: start the service, point DECIDER_URL at another one, or decide without it.`;
 }
 
-/** Whether the user has a decider.service unit at all. One cheap spawn, failure path only. */
-export function deciderUnitInstalled(listUnitFiles: string): boolean {
-  return /^decider\.service\b/m.test(listUnitFiles);
-}
-
+/** Normalise whatever the service returned into an answer plus an escalate flag. */
 export function normaliseAnswer(raw: Record<string, unknown>, threshold: number): { answer: DecisionAnswer; escalate: boolean } {
   const type = (raw.type as QuestionType) ?? "choice";
   const probabilities = (raw.probabilities ?? raw.probs ?? {}) as Record<string, number>;
@@ -171,8 +90,12 @@ export function normaliseAnswer(raw: Record<string, unknown>, threshold: number)
   const confidence = raw.confidence !== undefined ? (raw.confidence as number) : fallback;
 
   const answer: DecisionAnswer = { type, probabilities: Object.fromEntries(ranked), confidence };
-  if (answer.type === "noul") answer.noul = raw.noul as number;
-  else if (answer.type === "score") {
+  if (answer.type === "noul") {
+    // A noul answer's value *is* a probability. Prefer the field the service
+    // sent; otherwise read it off the true/false distribution, so the tool
+    // never renders "?" while holding the answer in its hands.
+    answer.noul = typeof raw.noul === "number" ? raw.noul : (ranked.find(([key]) => /^(true|yes)$/i.test(key))?.[1] ?? top?.[1] ?? 0);
+  } else if (answer.type === "score") {
     // The service returns the level index; the legend carries the words.
     const level = (raw.score as number | string) ?? top?.[0];
     const legend = (raw.legend ?? undefined) as Record<string, string> | undefined;
