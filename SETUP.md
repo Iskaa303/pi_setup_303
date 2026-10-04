@@ -143,17 +143,44 @@ Pick the size that fits the GPU, not the headline number:
 |[decider-2b](https://huggingface.co/Mapika/decider-2b)|3.8 GB|the authors' default: routing, classification, judgments, browser agents|
 |decider-4b|8.4 GB|does not fit an 8 GB laptop card in bf16|
 
-The runtime is `torch` + `transformers>=5` (+ `flash-linear-attention`, Triton kernels for the
-Qwen3.5 linear-attention layers — without it the model still runs, several times slower). Serve it
-bound to `127.0.0.1` so nothing is exposed off-box, with `DECIDER_MODEL` pointing at the snapshot:
+## Running it
 
-```bash
-python -m decider.serve --model /nix/store/…-decider-2b --port 8137   # serves POST /v1/systemone
+```nix
+programs.pi-setup = {
+  enable = true;
+  decider = true;        # the only thing this needs; everything else is default
+};
 ```
+
+That writes a `decider.service` user unit — `uvicorn decider.serve:app` on
+`127.0.0.1:8137` with `DECIDER_MODEL` pointing at the snapshot — and sets
+`DECIDER_MODEL=decider-2b` for the extension. Off by default, and turning it off
+is complete: no unit, no CUDA packages referenced, and the 3.8 GB snapshot is
+never fetched, so the same config works on a laptop with no GPU.
+
+```sh
+systemctl --user start decider
+curl -s localhost:8137/v1/systemone -H 'content-type: application/json' \
+  -d '{"state":"which tool should I use?","questions":{"route":{"type":"choice",
+       "criteria":{"web":"needs the network","code":"touches the repo"}}}}'
+```
+
+Then `/decider on` in pi and `system_one_decide` answers. `/decider off` keeps the
+service loaded but stops the extension using it — the reverse of stopping the
+service, which the extension notices as unreachable.
 
 The extension is deliberately decoupled: it is only an HTTP client, so with nothing deployed it
 loads no weights, and it now says so plainly instead of pointing at a systemd unit that does not
 exist.
+
+The runtime is `torch` (CUDA build) + `transformers>=5` + `flash-linear-attention`, which the
+module assembles for you — CUDA torch is unfree, so the flake does its own
+`config.allowUnfree = true` nixpkgs import for that one derivation instead of
+asking you to allow unfree system-wide.
+
+```bash
+python -m decider.serve --model /nix/store/…-decider-2b --port 8137   # or: uvicorn decider.serve:app
+```
 
 ## Subagents and extensions
 

@@ -280,6 +280,33 @@
           camoufox-js = mkCamoufoxJs pkgs;
           extensions = mkExtensionPkgs pkgs;
           attentionSound = import ./nix/attention-sound.nix { inherit pkgs; };
+          # decider-2b (Mapika, Apache-2.0): a 4B->2B dense model that does not
+          # generate text, it returns typed probabilities from one forward pass.
+          # The Hub repo *is* a git repo and holds model.safetensors through LFS,
+          # so fetchgit needs fetchLFS to get the weights instead of pointers.
+          decider-2b = pkgs.fetchgit {
+            url = "https://huggingface.co/Mapika/decider-2b";
+            rev = "533964dae8be954c5b5e19fa4948e48408094c1e";
+            fetchLFS = true;
+            hash = "sha256-TWI6o2flZFp6bgFQU28JrW59HVmMtW0KNnab9X7mg4A=";
+          };
+          # transformers>=5, as decider-2b requires, with the CUDA torch (the
+          # default python3Packages.torch is CPU-only) and the Triton kernels
+          # for Qwen3.5's linear-attention layers. PYTHONPATH points at the
+          # snapshot, which carries decider/ itself, so no wheel is built.
+          # CUDA torch is unfree, so it gets its own nixpkgs import rather than
+          # asking the user to flip allowUnfree for their whole system.
+          deciderRuntime = let
+            unfree = import pkgs.path { inherit (pkgs) system; config.allowUnfree = true; };
+          in unfree.python3.withPackages (ps: with ps; [
+            torchWithCuda
+            transformers
+            numpy
+            fastapi
+            uvicorn
+            pydantic
+            flash-linear-attention
+          ]);
 
           pi = pkgs.callPackage ./nix/pi.nix {
             version = piVersion;
@@ -287,7 +314,7 @@
           };
         in
         rec {
-          inherit ketch camoufox-js pi attentionSound;
+          inherit ketch camoufox-js pi attentionSound decider-2b deciderRuntime;
 
           # All extensions in one output, for inspection or `pi install`.
           pi-setup = pkgs.symlinkJoin {
@@ -446,6 +473,34 @@
                 separate one-off download: npx camoufox-js fetch.
               '';
             };
+
+            decider = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                Run the local decider model as a systemd user service on
+                127.0.0.1:8137, which is the only thing extensions/decider talks
+                to. decider-2b holds ~3.8 GB of weights and loads them into GPU
+                memory at startup, so it costs real VRAM on a laptop.
+
+                Off by default and fully self-contained: with `decider = false`
+                no unit is written, nothing CUDA-related is referenced, and the
+                3.8 GB snapshot is never fetched. extensions/decider itself
+                ships either way and simply reports an unreachable service, so
+                this option only decides whether a server exists.
+              '';
+            };
+
+            deciderModel = lib.mkOption {
+              type = lib.types.package;
+              default = own.decider-2b;
+              defaultText = lib.literalExpression "pkgs.fetchgit of Mapika/decider-2b";
+              description = ''
+                The decider snapshot. It must be a Hub repo folder, not a bare
+                safetensors file: decider.infer reads decider_config.json and
+                the tokenizer from it. Only built when decider is on.
+              '';
+            };
           };
 
           config = lib.mkIf cfg.enable {
@@ -492,7 +547,37 @@
                 # put on any default path. cc.lib is included because pi's own
                 # wrapper prefixes it, and extraEnv replaces (not appends) to it.
                 LD_LIBRARY_PATH = lib.makeLibraryPath (camoufoxLibs pkgs ++ [ pkgs.stdenv.cc.cc.lib ]);
+              }
+              // lib.optionalAttrs cfg.decider {
+                # the model name the service reports, matching decider-2b
+                DECIDER_MODEL = "decider-2b";
               };
+
+            # The extension is only an HTTP client; this is the other half.
+            # Bound to loopback so nothing is exposed off-box.
+            systemd.user.services = lib.optionalAttrs cfg.decider {
+              decider = {
+                description = "decider-2b local decision model (System One)";
+                wantedBy = [ "default.target" ];
+                after = [ "network-online.target" ];
+                environment = {
+                  DECIDER_MODEL = "${cfg.deciderModel}";
+                  DECIDER_DEVICE = "cuda";
+                  # The snapshot carries decider/ itself, so no wheel is built.
+                  PYTHONPATH = "${cfg.deciderModel}";
+                  PYTHONUNBUFFERED = "1";
+                  # nvidia's libcuda lives outside the nix store on NixOS.
+                  LD_LIBRARY_PATH = "/run/opengl-driver/lib";
+                };
+                serviceConfig = {
+                  ExecStart = "${own.deciderRuntime}/bin/uvicorn decider.serve:app --host 127.0.0.1 --port 8137";
+                  Restart = "on-failure";
+                  RestartSec = 5;
+                  # first start reads 3.8 GB from the store into VRAM
+                  TimeoutStartSec = 600;
+                };
+              };
+            };
             };
           };
         };
