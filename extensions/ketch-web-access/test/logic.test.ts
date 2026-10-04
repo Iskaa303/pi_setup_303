@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   buildArtifact,
+  camoufoxAdvice,
   domainAllowed,
   extractRelevantSpans,
   findInContent,
@@ -139,6 +140,25 @@ test("vttToText keeps the timestamp that a moment can be found by", () => {
   assert.match(text, /^\[09:00\] Something else$/m);
   // This is what makes "what happens at 7:57" answerable without a parser.
   assert.ok(text.includes("[07:55]"), "a cue near 7:57 must carry its time");
+});
+
+test("camoufoxAdvice names the half that is missing", () => {
+  // The client comes from nix; telling the model to npm install it would create
+  // a second, divergent copy next to the store one.
+  const missingBrowser = camoufoxAdvice({
+    browser: "/home/u/.cache/camoufox/camoufox-bin",
+    client_installed: true,
+    browser_installed: false,
+  });
+  assert.match(missingBrowser, /npx camoufox-js fetch/);
+  assert.doesNotMatch(missingBrowser, /npm install camoufox-js/, "the nix client must not be reinstalled");
+  assert.match(missingBrowser, /preservation/, "and the user should know a reboot will take it away");
+
+  const missingClient = camoufoxAdvice({ client_installed: false, browser_installed: true });
+  assert.match(missingClient, /camoufox-js is not reachable/);
+
+  assert.equal(camoufoxAdvice({ client_installed: true, browser_installed: true, browser: "/x/camoufox-bin" }), "/x/camoufox-bin");
+  assert.equal(camoufoxAdvice({ error: "boom" }), "boom");
 });
 
 test("formatSearchText links every result or says so", () => {

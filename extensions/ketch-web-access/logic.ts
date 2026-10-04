@@ -393,6 +393,32 @@ export function vttToText(vtt: string, options: { timestamps?: boolean } = {}): 
   return out.join("\n");
 }
 
+/** What pi needs to be told when the camoufox engine is not ready. */
+export interface CamoufoxStatus {
+  browser?: string;
+  browser_installed?: boolean;
+  client_installed?: boolean;
+  error?: string;
+  install_hint?: string;
+}
+
+/**
+ * The remedy depends on which half is missing, and telling the model to
+ * `npm install camoufox-js` when the client is already provided by nix is how it
+ * ends up with a second, divergent copy.
+ */
+export function camoufoxAdvice(status: CamoufoxStatus): string {
+  if (status.error) return status.error;
+  if (!status.client_installed) {
+    return "camoufox-js is not reachable from this extension. Enable programs.pi-setup.camoufox (nix provides the client), or npm install camoufox-js next to it.";
+  }
+  if (!status.browser_installed) {
+    const where = status.browser ?? "~/.cache/camoufox";
+    return `the browser binary is missing from ${where}. Run: npx camoufox-js fetch (once, ~660MB). On NixOS put that path in your preservation list, or it disappears on reboot.`;
+  }
+  return status.browser ?? "ready";
+}
+
 // ---------------------------------------------------------------------------
 // findText pinned to a character offset, so callers can report location
 // ---------------------------------------------------------------------------

@@ -93,7 +93,29 @@ depends on it.
 | `pi-notify` | `@leo-alvarenga/pi-ext-core` and its deps |
 | `pi-statusline` | `@narumitw/pi-tui-kit` and its deps |
 
-## The decider service
+## Camoufox's browser is a cache, not a package
+
+`packages.camoufox-js` provides the *client* (the playwright-core wrapper) from
+the nix store. The browser itself is a ~660 MB download that camoufox-js puts in
+`$XDG_CACHE_HOME/camoufox`, and it is **not** a nix package — so on an
+impermanence setup a reboot deletes it and `fetch_content {engine: "camoufox"}`
+quietly falls back to Ketch's Chromium.
+
+Preserve it, beside `.cache/ketch`:
+
+```nix
+preservation.preserveAt."/persist".users.<you>.directories = [
+  ".cache/ketch"
+  ".cache/camoufox"   # ~660MB; re-fetch with: npx camoufox-js fetch
+];
+```
+
+Until it is preserved, `ketch_browser {action: "status"}` reports "the browser
+binary is missing from ~/.cache/camoufox" and suggests `npx camoufox-js fetch`
+— deliberately not `npm install camoufox-js`, which would shadow the nix client
+with a second, divergent copy.
+
+## Decider weights
 
 `extensions/decider` only speaks HTTP, so the model can live anywhere that
 answers the Jev wire protocol. decider's own server is exactly that contract

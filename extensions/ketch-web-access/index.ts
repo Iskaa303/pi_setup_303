@@ -32,6 +32,7 @@ import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import {
   buildArtifact,
+  camoufoxAdvice,
   domainAllowed,
   findInContent,
   formatArtifact,
@@ -484,7 +485,9 @@ export default function ketchWebAccess(pi: ExtensionAPI): void {
       const lines = [
         camoufox?.ok
           ? 'Web fetching: engine "camoufox" (a real patched Firefox) is installed and ready. Prefer it for bot-walled, Cloudflare-style or JavaScript-gated pages, and for video transcripts. Do not probe for it: it is there.'
-          : 'Web fetching: engine "camoufox" is not installed. Use the default Ketch renderer (HTTP, then headless Chromium) and do not try engine "camoufox".',
+          : camoufox?.client_installed
+            ? `Web fetching: engine "camoufox" is meant to be available on this machine (its client is installed), but the browser binary is missing: ${camoufoxAdvice(camoufox ?? {})} Do not npm install camoufox-js — the client is provided by nix. Until the browser is fetched, use the default Ketch renderer.`
+            : 'Web fetching: engine "camoufox" is not installed. Use the default Ketch renderer (HTTP, then headless Chromium) and do not try engine "camoufox".',
         "Web search: `web_search` with 2-4 queries, then `fetch_content` on the sources you intend to rely on.",
         videoCapabilities(),
       ];
@@ -858,7 +861,7 @@ export default function ketchWebAccess(pi: ExtensionAPI): void {
         const text = [
           run.stdout.trim() || run.stderr.trim() || `ketch browser ${params.action} exited ${run.code}.`,
           "",
-          `camoufox: ${camoufox.ok ? "ready" : "not ready"} — ${camoufox.ok ? camoufox.browser : camoufox.error ?? camoufox.install_hint ?? "unavailable"}`,
+          `camoufox: ${camoufox.ok ? "ready" : "not ready"} — ${camoufoxAdvice(camoufox)}`,
         ].join("\n");
         return {
           content: [{ type: "text" as const, text }],
