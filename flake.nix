@@ -188,17 +188,6 @@
           depsHash = "sha256-50LPdwXkFuiatXMP8nxF7j4dd8Yue0hizK7ojAOnwwg=";
           prune = false;
         };
-        feynman = {
-          src = ./vendor/feynman;
-          version = "0.5.24";
-          lock = ./nix/locks/feynman.json;
-          depsHash = "sha256-AFFe69ibETI56Z3yAi5CXQ8ce/f8zCx38CGmIJq30mM=";
-          # pi-subagents and pi-web-access ship as feynman dependencies but the
-          # pi extension never imports them: this repo already provides both, and
-          # keeping them out of the tree stops a second copy from ever existing.
-          dropDeps = [ "pi-subagents" "pi-web-access" ];
-          prune = false;
-        };
         pi-fff = {
           src = ./vendor/pi-fff;
           version = "0.11.0";
@@ -351,9 +340,9 @@
                 # pi-subagents only discovers package-provided agents from
                 # settings.json packages or npm dirs, never from
                 # ~/.pi/agent/extensions. Listing the symlink paths here makes
-                # pi-subagents see agents that ship inside a package (feynman's
-                # researcher/reviewer/verifier/writer). pi resolves both routes
-                # to the same real path and loads the extension once.
+                # pi-subagents see agents that ship inside a package. pi
+                # resolves both routes to the same real path and loads the
+                # extension once.
                 map (name: "${config.home.homeDirectory}/.pi/agent/extensions/${name}") extensionNames
               );
               defaultText = lib.literalExpression ''"the symlinked extension paths"'';

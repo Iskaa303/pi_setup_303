@@ -91,30 +91,27 @@ depends on it.
 | `rpiv-ask-user-question`, `rpiv-todo` | `@juicesharp/rpiv-config`, typebox |
 | `pi-notify` | `@leo-alvarenga/pi-ext-core` and its deps |
 | `pi-statusline` | `@narumitw/pi-tui-kit` and its deps |
-| `feynman` | science-database / arXiv / HuggingFace clients; `pi-subagents` and `pi-web-access` are dropped on purpose, this repo supplies both |
 | `pi-fff` | `@ff-labs/fff-node`, `@ff-labs/fff-bun` |
 
 ## Subagents and extensions
 
-Two things make packages cooperate here:
+Two things make the packages cooperate:
 
-- `settings.json` lists the `~/.pi/agent/extensions/<name>` symlink paths, not
-  only the store paths. pi resolves both routes to the same real path and loads
-  each extension once, but pi-subagents only discovers agents that ship inside a
-  package by reading `settings.json` — so feynman's `researcher`, `reviewer`,
-  `verifier` and `writer` become visible to it this way.
+- `settings.json` lists the `~/.pi/agent/extensions/<name>` symlink paths,
+  not only store paths. pi resolves both routes to the same real path and loads
+  each extension once, but pi-subagents only discovers agents that ship inside
+  a package by reading `settings.json` — never the extensions directory.
 - `settings.subagents.defaultSubagentOnlyExtensions` is set to the
   `ketch-web-access` path: foreground children do not inherit the parent's
   extensions, so the web tools have to be passed across the hop.
 
 `programs.pi-setup.researcher` is an agent definition written to
 `~/.pi/agent/agents/researcher.md`. User agents outrank package agents and
-builtins, so it is the `researcher` pi-subagents resolves: feynman's tool list
-plus a short prompt that delegates the long doctrine to feynman's skills
-(`deep-research`, `literature-review`, `research-review`, …). Set it to `null`
-to fall back to the packaged one.
+builtins, so it is the `researcher` pi-subagents resolves: a short prompt
+instead of a long doctrine, with the depth work left to the model. Set it to
+`null` to drop the override.
 
-`programs.pi-setup.subagents` is merged under those defaults for anything else.
+`programs.pi-setup.subagents` is merged under those defaults.
 
 To wire up a new extension the same way:
 
@@ -122,9 +119,9 @@ To wire up a new extension the same way:
    has npm deps; `./nix/pin-hashes.sh <name>` prints them).
 2. If it ships `pi.subagents.agents`, nothing else is needed — the symlink plus
    the settings entry is what pi-subagents reads.
-3. If its prompts name providers `ketch-web-access` lacks (feynman's researcher
-   suggests `provider: "parallel-mcp"`), add an alias to `PROVIDER_ALIASES` in
-   the web extension so the value resolves instead of being rejected.
+3. If its prompts name providers `ketch-web-access` lacks, add an alias to
+   `PROVIDER_ALIASES` in the web extension so the value resolves instead of
+   being rejected.
 
 ## Changing dependencies
 

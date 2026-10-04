@@ -171,6 +171,10 @@ type Engine = (typeof ENGINES)[number];
 
 const WORKER = fileURLToPath(new URL("browser.mjs", import.meta.url));
 
+// pi itself is a compiled binary, so process.execPath is pi, not node — running
+// the worker with it would start a session instead of a status check.
+const NODE = process.env.KETCH_WEB_ACCESS_NODE?.trim() || "node";
+
 interface CamoufoxPage {
   url: string;
   fetched_url?: string;
@@ -191,8 +195,9 @@ interface CamoufoxReport {
 
 async function camoufoxReport(): Promise<CamoufoxReport> {
   if (!existsSync(WORKER)) return { ok: false, engine: "camoufox", error: `worker missing at ${WORKER}` };
-  const run = await runBinary(process.execPath, [WORKER, "--status"], { cwd: dirname(WORKER), timeoutMs: 30_000 });
-  return parseJson<CamoufoxReport>(run.stdout) ?? { ok: false, engine: "camoufox", error: run.stderr.trim() || "worker produced no output" };
+  const run = await runBinary(NODE, [WORKER, "--status"], { cwd: dirname(WORKER), timeoutMs: 30_000 });
+  if (run.code !== 0) return { ok: false, engine: "camoufox", error: (run.stderr.trim() || run.stdout.trim() || `node exited ${run.code}`).slice(0, 400) };
+  return parseJson<CamoufoxReport>(run.stdout) ?? { ok: false, engine: "camoufox", error: "worker produced no JSON" };
 }
 
 /** Render with Camoufox, then convert the HTML through Ketch's readability pipeline. */
@@ -206,7 +211,7 @@ async function camoufoxPages(
     throw new Error(`Camoufox engine unavailable: ${detail || "unknown reason"}. Use engine "ketch", or run: npm install camoufox-js && npx camoufox-js fetch`);
   }
   const run = await runBinary(
-    process.execPath,
+    NODE,
     [WORKER, JSON.stringify({ urls, maxChars: options.maxChars, selector: options.selector, humanize: options.humanize })],
     { cwd: options.cwd, signal: options.signal, timeoutMs: 240_000 },
   );
@@ -813,7 +818,7 @@ export default function ketchWebAccess(pi: ExtensionAPI): void {
         const text = [
           run.stdout.trim() || run.stderr.trim() || `ketch browser ${params.action} exited ${run.code}.`,
           "",
-          `camoufox: ${camoufox.ok ? "ready" : "not ready"} (${camoufox.browser}${camoufox.install_hint && !camoufox.ok ? ` — ${camoufox.install_hint}` : ""})`,
+          `camoufox: ${camoufox.ok ? "ready" : "not ready"} — ${camoufox.ok ? camoufox.browser : camoufox.error ?? camoufox.install_hint ?? "unavailable"}`,
         ].join("\n");
         return {
           content: [{ type: "text" as const, text }],
