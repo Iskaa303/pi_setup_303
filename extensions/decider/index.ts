@@ -24,11 +24,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import {
   DEFAULT_PATH,
   DEFAULT_URL,
-  findAskTool,
   isChildSession,
   normaliseAnswer,
+  permissionPrompt,
   post,
-  requestPermission,
   SessionStore,
   type State,
 } from "./logic.js";
@@ -184,4 +183,3 @@ export default function decider(pi: ExtensionAPI): void {
   });
 }
 
-/** Ask once through rpiv-ask-user-question, remembering the answer for this session. */
