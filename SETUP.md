@@ -122,26 +122,38 @@ answers the Jev wire protocol. decider's own server is exactly that contract
 (`POST /v1/systemone` with `{state, questions}` → `{answers: {...}}`), so it
 plugs in unchanged.
 
-Weights: **8.4 GB** (bf16, Qwen3.5-4B-Base). On NixOS, package it with
-`fetchurl` so it lands in `/nix/store` — which is on your encrypted `/persist`
-filesystem, so it survives rebuilds and `nixos-rebuild switch`, unlike a
-`~/.cache` download:
+Weights come from the Hub as a **whole repo folder**, not a single file — `decider.infer.Decider(path)`
+and `decider.serve` read `decider_config.json` and the letter rows from the snapshot, so `fetchurl`-ing
+`model.safetensors` does not work. The Hub repo is itself a git repo, so pin the revision in nix:
 
 ```nix
-packages.decider-model = pkgs.fetchurl {
-  url = "https://huggingface.co/mapika/decider-4b/resolve/main/model.safetensors";
-  hash = "sha256-…";   # nix build .#decider-model --refresh
+# rev: the commit sha shown by `git ls-remote https://huggingface.co/Mapika/decider-2b refs/heads/main`
+packages.decider-2b = pkgs.fetchgit {
+  url = "https://huggingface.co/Mapika/decider-2b";
+  rev = "<40-char sha>";
+  hash = "sha256-…";   # nix build .#decider-2b --refresh
 };
 ```
 
-The runtime is a Python environment (torch CPU + transformers + the `decider/`
-package from https://github.com/Mapika/decider). Run it as a user service bound
-to `127.0.0.1` so nothing is exposed off-box; `/decider on` then makes the
-extension use it, and `/decider off` puts it back to zero battery.
+Pick the size that fits the GPU, not the headline number:
 
-The extension is deliberately decoupled: with no service running, `decide`
-answers "unreachable, start it with systemctl --user start decider, decide
-without it" and loads nothing.
+|model|bf16 weights|notes|
+|---|---|---|
+|[decider-0.8b](https://huggingface.co/Mapika/decider-0.8b)|1.4 GB|routing and yes/no, within 1–4 points of the 2B|
+|[decider-2b](https://huggingface.co/Mapika/decider-2b)|3.8 GB|the authors' default: routing, classification, judgments, browser agents|
+|decider-4b|8.4 GB|does not fit an 8 GB laptop card in bf16|
+
+The runtime is `torch` + `transformers>=5` (+ `flash-linear-attention`, Triton kernels for the
+Qwen3.5 linear-attention layers — without it the model still runs, several times slower). Serve it
+bound to `127.0.0.1` so nothing is exposed off-box, with `DECIDER_MODEL` pointing at the snapshot:
+
+```bash
+python -m decider.serve --model /nix/store/…-decider-2b --port 8137   # serves POST /v1/systemone
+```
+
+The extension is deliberately decoupled: it is only an HTTP client, so with nothing deployed it
+loads no weights, and it now says so plainly instead of pointing at a systemd unit that does not
+exist.
 
 ## Subagents and extensions
 
