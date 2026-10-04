@@ -93,6 +93,34 @@ depends on it.
 | `pi-statusline` | `@narumitw/pi-tui-kit` and its deps |
 | `pi-fff` | `@ff-labs/fff-node`, `@ff-labs/fff-bun` |
 
+## The decider service
+
+`extensions/decider` only speaks HTTP, so the model can live anywhere that
+answers the Jev wire protocol. decider's own server is exactly that contract
+(`POST /v1/systemone` with `{state, questions}` → `{answers: {...}}`), so it
+plugs in unchanged.
+
+Weights: **8.4 GB** (bf16, Qwen3.5-4B-Base). On NixOS, package it with
+`fetchurl` so it lands in `/nix/store` — which is on your encrypted `/persist`
+filesystem, so it survives rebuilds and `nixos-rebuild switch`, unlike a
+`~/.cache` download:
+
+```nix
+packages.decider-model = pkgs.fetchurl {
+  url = "https://huggingface.co/mapika/decider-4b/resolve/main/model.safetensors";
+  hash = "sha256-…";   # nix build .#decider-model --refresh
+};
+```
+
+The runtime is a Python environment (torch CPU + transformers + the `decider/`
+package from https://github.com/Mapika/decider). Run it as a user service bound
+to `127.0.0.1` so nothing is exposed off-box; `/decider on` then makes the
+extension use it, and `/decider off` puts it back to zero battery.
+
+The extension is deliberately decoupled: with no service running, `decide`
+answers "unreachable, start it with systemctl --user start decider, decide
+without it" and loads nothing.
+
 ## Subagents and extensions
 
 Two things make the packages cooperate:
