@@ -40,6 +40,7 @@ import {
   isVideoUrl,
   newId,
   queriesFrom,
+  vttToText,
   type ScrapePage,
   type SearchResult,
   type Stored,
@@ -302,16 +303,10 @@ async function videoPage(
   const subs = (await readdir(dir).catch(() => [])).filter((file) => file.endsWith(".vtt"));
   if (subs.length) {
     const raw = await readFile(join(dir, subs[0]), "utf8").catch(() => "");
-    parts.push(
-      raw
-        .replace(/^[\s\S]*?(?:\n\n|\r\n\r\n)/, "")
-        .replace(/<\/?c[^>]*>/g, "")
-        .replace(/^\d{2}:\d{2}:\d{2}\.\d{3} --> .*$/gm, "")
-        .replace(/\d{2}:\d{2}:\d{2}\.\d{3}/g, "")
-        .replace(/\n{2,}/g, "\n")
-        .trim()
-        .slice(0, params.maxChars),
-    );
+    // Transcripts are stored whole and paged through get_search_content, so
+    // they are deliberately not cut at maxChars.
+    const text = vttToText(raw);
+    parts.push(text.length > 500_000 ? `${text.slice(0, 500_000)}\n\n_Transcript truncated at 500k characters._` : text);
   } else if (yt.code !== 0) {
     parts.push(`Transcript unavailable: ${(yt.stderr || yt.stdout).trim().split("\n").slice(-3).join(" ")}`);
   }

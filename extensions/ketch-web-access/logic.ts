@@ -336,6 +336,39 @@ export function isVideoUrl(url: string): boolean {
   return VIDEO_URL.test(url);
 }
 
+/**
+ * YouTube auto-captions ship as WebVTT with rolling-caption duplicates (every
+ * line repeats as the caption scrolls) and inline <00:00:01.234> timing marks.
+ * Strip both, otherwise the transcript is twice as long and full of <>.
+ */
+export function vttToText(vtt: string): string {
+  const lines = vtt.replace(/\r\n/g, "\n").split("\n");
+  const out: string[] = [];
+  let started = false;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!started) {
+      // Skip the WEBVTT header and cue metadata up to the first blank line.
+      if (line === "") started = true;
+      continue;
+    }
+    if (!line) continue;
+    if (line.startsWith("WEBVTT") || line.startsWith("NOTE") || line.startsWith("Kind:") || line.startsWith("Language:")) continue;
+    if (line.includes("-->")) continue;
+    // Cue identifiers ("1", "42") sit alone on their own line before the timing.
+    if (/^\d+$/.test(line)) continue;
+    const text = line
+      .replace(/<[^>]*>/g, "")
+      .replace(/\d{1,2}:\d{2}:\d{2}[.,]\d{3}/g, "")
+      .trim();
+    if (!text) continue;
+    // Rolling captions repeat the previous line; keep only the change.
+    if (out[out.length - 1] === text) continue;
+    out.push(text);
+  }
+  return out.join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // findText pinned to a character offset, so callers can report location
 // ---------------------------------------------------------------------------

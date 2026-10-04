@@ -12,6 +12,7 @@ import {
   hashContent,
   isVideoUrl,
   queriesFrom,
+  vttToText,
 } from "../logic.ts";
 
 test("queriesFrom prefers queries, dedupes empties, caps at 8", () => {
@@ -105,6 +106,29 @@ test("githubSlug and isVideoUrl pick out the special-cased URLs", () => {
   assert.equal(isVideoUrl("https://youtu.be/abc"), true);
   assert.equal(isVideoUrl("/tmp/screen.mp4"), true);
   assert.equal(isVideoUrl("https://example.com/guide.html"), false);
+});
+
+test("vttToText strips WebVTT markup, timing marks and rolling duplicates", () => {
+  const vtt = [
+    "WEBVTT",
+    "Kind: captions",
+    "Language: en",
+    "",
+    "1",
+    "00:00:00.000 --> 00:00:02.000 align:start position:0%",
+    "Welcome<00:00:00.500><c> back</c>.",
+    "",
+    "2",
+    "00:00:02.000 --> 00:00:04.000 align:start position:0%",
+    "Welcome back.",
+    "",
+    "3",
+    "00:00:04.000 --> 00:00:06.000",
+    "For those that are new,",
+  ].join("\n");
+
+  assert.equal(vttToText(vtt), "Welcome back.\nFor those that are new,");
+  assert.equal(vttToText(""), "");
 });
 
 test("formatSearchText links every result or says so", () => {
