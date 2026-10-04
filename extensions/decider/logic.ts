@@ -1,13 +1,10 @@
 /**
- * Pure logic for the decider extension: state on disk, the HTTP call, and
+ * Pure logic for the decider extension: per-session state, the HTTP call, and
  * answer normalisation. Kept free of pi and typebox imports so it can be
  * unit-tested directly.
  */
 
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
 
 const DEFAULT_URL = "http://127.0.0.1:8137";
 const DEFAULT_PATH = "/v1/systemone";
@@ -35,27 +32,38 @@ export interface DecisionAnswer {
 
 export interface State {
   enabled: boolean;
-  /** set once the user has answered the permission question; never asked again */
+  /** set once the user has answered the permission question; not asked again */
   declined?: boolean;
   declinedAt?: number;
 }
 
-export function statePath(agentDir: string): string {
-  return join(agentDir, "decider", "state.json");
-}
+/**
+ * On/off is a session decision, not a global preference: whether to spend
+ * battery on a 4B model belongs to the conversation you are in right now.
+ * So the state lives in this process, keyed by session id, and is dropped when
+ * the session ends. A refusal is remembered for the rest of that session and
+ * forgotten by the next one — nothing is written to ~/.pi.
+ */
+export class SessionStore {
+  private readonly states = new Map<string, State>();
 
-export function readState(agentDir: string): State {
-  try {
-    return { enabled: false, ...JSON.parse(readFileSync(statePath(agentDir), "utf8")) };
-  } catch {
-    return { enabled: false };
+  get(sessionId: string): State {
+    return { enabled: false, ...this.states.get(sessionId) };
   }
-}
 
-export function writeState(agentDir: string, state: State): void {
-  const path = statePath(agentDir);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`);
+  set(sessionId: string, patch: State): State {
+    const next = { ...this.get(sessionId), ...patch };
+    this.states.set(sessionId, next);
+    return next;
+  }
+
+  drop(sessionId: string): void {
+    this.states.delete(sessionId);
+  }
+
+  get size(): number {
+    return this.states.size;
+  }
 }
 
 /** A child subagent session cannot ask the user anything, so never gate on it. */
@@ -128,11 +136,5 @@ export function normaliseAnswer(raw: Record<string, unknown>, threshold: number)
   return { answer, escalate: confidence < threshold };
 }
 
-/** The agent directory pi is using right now. */
-export function currentAgentDir(): string {
-  const explicit = process.env.PI_CODING_AGENT_DIR;
-  if (explicit && explicit !== "~") return explicit;
-  return join(process.env.HOME || homedir(), ".pi", "agent");
-}
 
 export { DEFAULT_PATH, DEFAULT_URL };

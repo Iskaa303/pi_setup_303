@@ -22,15 +22,13 @@
 import { Type, type Static } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-  currentAgentDir,
   DEFAULT_PATH,
   DEFAULT_URL,
   findAskTool,
   isChildSession,
   normaliseAnswer,
   post,
-  readState,
-  writeState,
+  SessionStore,
   type State,
 } from "./logic.js";
 
@@ -66,23 +64,26 @@ function statusText(state: State, child: boolean): string {
 }
 
 export default function decider(pi: ExtensionAPI): void {
-  const dir = () => currentAgentDir();
+  // Session-scoped: nothing is written to disk, and a new session starts off
+  // again without asking about a decision this one already made.
+  const store = new SessionStore();
+  const sessionId = (ctx: ExtensionContext) => ctx.sessionManager?.getSessionId?.() ?? "default";
 
   const setStatus = (ctx: ExtensionContext) => {
     const ui = (ctx as unknown as { ui?: { setStatus?: (key: string, text: string | undefined) => void } }).ui;
-    ui?.setStatus?.("decider", statusText(readState(dir()), isChildSession(ctx as never)));
+    ui?.setStatus?.("decider", statusText(store.get(sessionId(ctx)), isChildSession(ctx as never)));
   };
 
   pi.registerCommand?.("decider", {
-    description: "decider: on | off | status | reset — enable or disable the local decision model",
+    description: "decider: on | off | status | reset — enable or disable the local decision model (this session)",
     handler: async (args: string, ctx: ExtensionContext) => {
       const command = args.trim().split(/\s+/)[0] ?? "status";
-      const state = readState(dir());
-      if (command === "on") writeState(dir(), { enabled: true, declined: false });
-      else if (command === "off") writeState(dir(), { ...state, enabled: false });
-      else if (command === "reset") writeState(dir(), { enabled: false });
+      const id = sessionId(ctx);
+      if (command === "on") store.set(id, { enabled: true, declined: false });
+      else if (command === "off") store.set(id, { enabled: false });
+      else if (command === "reset") store.set(id, { enabled: false, declined: false });
       setStatus(ctx);
-      ctx.ui?.notify?.(statusText(readState(dir()), isChildSession(ctx as never)), "info");
+      ctx.ui?.notify?.(statusText(store.get(id), isChildSession(ctx as never)), "info");
     },
   });
 
@@ -100,14 +101,15 @@ export default function decider(pi: ExtensionAPI): void {
     ],
     parameters: DecideParams,
     async execute(_id, params: DecideArgs, _signal, _update, ctx: ExtensionContext) {
-      const state = readState(dir());
+      const id = sessionId(ctx);
+      const state = store.get(id);
 
       if (isChildSession(ctx as never)) return textResult(disabledText("not available in subagents"));
-      if (state.declined && !state.enabled) return textResult(disabledText("the user turned it off"));
+      if (state.declined && !state.enabled) return textResult(disabledText("you turned it off for this session"));
 
       if (!state.enabled) {
-        const granted = await askPermission(ctx, dir());
-        if (!granted) return textResult(disabledText("the user declined permission to load it"));
+        const granted = await askPermission(ctx, store, id);
+        if (!granted) return textResult(disabledText("you declined permission to load it"));
       }
 
       const reply = await post(
@@ -151,15 +153,20 @@ export default function decider(pi: ExtensionAPI): void {
   } as never);
 
   pi.on("session_start", (_event, ctx: ExtensionContext) => setStatus(ctx));
+  // Forget the decision with the session that made it.
+  pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
+    store.drop(sessionId(ctx));
+    ctx.ui?.setStatus?.("decider", undefined);
+  });
 }
 
-/** Ask once through rpiv-ask-user-question, remembering the answer. */
-async function askPermission(ctx: ExtensionContext, agentDir: string): Promise<boolean> {
+/** Ask once through rpiv-ask-user-question, remembering the answer for this session. */
+async function askPermission(ctx: ExtensionContext, store: SessionStore, sessionId: string): Promise<boolean> {
   const tool = findAskTool(ctx as unknown as { tools?: unknown });
   if (!tool) {
     // No ask tool loaded: make the model do the asking, and treat silence as a no.
     ctx.ui?.notify?.("decider is off. Ask the user whether to load the local model, or run /decider on.", "warning");
-    writeState(agentDir, { enabled: false, declined: true, declinedAt: Date.now() });
+    store.set(sessionId, { enabled: false, declined: true, declinedAt: Date.now() });
     return false;
   }
 
@@ -183,7 +190,7 @@ async function askPermission(ctx: ExtensionContext, agentDir: string): Promise<b
     granted = false;
   }
 
-  writeState(agentDir, granted ? { enabled: true } : { enabled: false, declined: true, declinedAt: Date.now() });
-  ctx.ui?.notify?.(granted ? "decider enabled" : "decider stays off", granted ? "info" : "warning");
+  store.set(sessionId, granted ? { enabled: true, declined: false } : { enabled: false, declined: true, declinedAt: Date.now() });
+  ctx.ui?.notify?.(granted ? "decider enabled for this session" : "decider stays off for this session", granted ? "info" : "warning");
   return granted;
 }

@@ -1,36 +1,42 @@
 // Run: node --experimental-strip-types --test test/decider.test.ts
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { after, test } from "node:test";
-import { existsSync as _exists } from "node:fs";
-import { normaliseAnswer, readState, statePath, writeState } from "../logic.ts";
+import { test } from "node:test";
+import { normaliseAnswer, SessionStore } from "../logic.ts";
 
-const dirs: string[] = [];
-const agentDir = () => {
-  const dir = mkdtempSync(join(tmpdir(), "decider-test-"));
-  dirs.push(dir);
-  return dir;
-};
-after(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
-
-test("state defaults to disabled and nothing is asked twice", () => {
-  const dir = agentDir();
-  assert.deepEqual(readState(dir), { enabled: false });
-
-  writeState(dir, { enabled: false, declined: true, declinedAt: 123 });
-  const reread = readState(dir);
-  assert.equal(reread.declined, true);
-  assert.equal(reread.enabled, false, "a refusal must not also enable the model");
+test("a session starts off and nothing has been decided yet", () => {
+  const store = new SessionStore();
+  assert.deepEqual(store.get("s1"), { enabled: false });
+  assert.equal(store.size, 0, "reading must not create an entry");
 });
 
-test("state file lives under the agent dir and is readable", () => {
-  const dir = agentDir();
-  writeState(dir, { enabled: true });
-  const path = statePath(dir);
-  assert.ok(_exists(path));
-  assert.equal(JSON.parse(readFileSync(path, "utf8")).enabled, true);
+test("state is per session, so one answer never leaks into another", () => {
+  const store = new SessionStore();
+  store.set("s1", { enabled: false, declined: true, declinedAt: 1 });
+  assert.equal(store.get("s1").declined, true);
+  assert.equal(store.get("s2").declined, undefined, "a new session is asked afresh");
+  assert.equal(store.get("s2").enabled, false);
+
+  store.set("s2", { enabled: true });
+  assert.equal(store.get("s1").enabled, false, "enabling one session does not enable another");
+});
+
+test("updates merge rather than replace", () => {
+  const store = new SessionStore();
+  store.set("s1", { enabled: false, declined: true, declinedAt: 7 });
+  const next = store.set("s1", { enabled: true });
+  assert.equal(next.enabled, true);
+  assert.equal(next.declined, true, "the record of the refusal is kept until reset");
+  assert.equal(next.declinedAt, 7);
+});
+
+test("dropping a session forgets its decision", () => {
+  const store = new SessionStore();
+  store.set("s1", { enabled: true });
+  store.set("s2", { enabled: true });
+  assert.equal(store.size, 2);
+  store.drop("s1");
+  assert.equal(store.size, 1);
+  assert.deepEqual(store.get("s1"), { enabled: false });
 });
 
 test("normaliseAnswer ranks options and flags low confidence for escalation", () => {
@@ -46,7 +52,7 @@ test("normaliseAnswer ranks options and flags low confidence for escalation", ()
 test("normaliseAnswer handles noul and score answers", () => {
   const noul = normaliseAnswer({ type: "noul", noul: 0.83 }, 0.8);
   assert.equal(noul.answer.noul, 0.83);
-  assert.equal(noul.escalate, false);
+  assert.equal(noul.escalate, false, "a noul answer's probability is its confidence");
 
   const score = normaliseAnswer({ type: "score", probabilities: { low: 0.1, high: 0.9 } }, 0.8);
   assert.equal(score.answer.score, "high");
@@ -54,7 +60,13 @@ test("normaliseAnswer handles noul and score answers", () => {
 
 test("normaliseAnswer keeps the score legend so levels can be rendered", () => {
   const score = normaliseAnswer(
-    { type: "score", score: 2, confidence: 0.9, probabilities: { "0": 0.05, "1": 0.05, "2": 0.9 }, legend: { "0": "Low", "1": "Medium", "2": "Critical" } },
+    {
+      type: "score",
+      score: 2,
+      confidence: 0.9,
+      probabilities: { "0": 0.05, "1": 0.05, "2": 0.9 },
+      legend: { "0": "Low", "1": "Medium", "2": "Critical" },
+    },
     0.8,
   );
   assert.equal(score.answer.score, 2);

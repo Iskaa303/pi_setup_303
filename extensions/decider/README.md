@@ -21,7 +21,8 @@ in context. So:
 - the first `decide` call asks the user for permission, through
   [rpiv-ask-user-question](../vendor/rpiv-mono/packages/rpiv-ask-user-question)
   when it is loaded, and remembers the answer either way
-- a refusal is permanent until `/decider on`
+- a refusal is remembered for the rest of **that session**; the next session
+  asks afresh
 - **subagents never load it**: a child session has no user to ask, so `decide`
   returns "unavailable, decide without it"
 - an unreachable service costs nothing — no weights, no memory, just a note
@@ -32,8 +33,8 @@ in context. So:
 |---|---|
 | `/decider` or `/decider status` | show whether it is on, off or declined |
 | `/decider on` | enable it and load weights on the next `decide` |
-| `/decider off` | disable without forgetting a previous refusal |
-| `/decider reset` | forget a refusal, so the next call asks again |
+| `/decider off` | disable without forgetting the refusal |
+| `/decider reset` | clear the refusal so the next call asks again |
 
 The status line shows `decider: on` / `off` / `declined` through
 [pi-statusline](../vendor/pi-statusline)'s extension-status row.
@@ -60,9 +61,13 @@ says the same — it has no access to the conversation.
 ## The service
 
 The extension expects an HTTP service (von-compatible `/v1/systemone` by
-default, override with `DECIDER_URL` / `DECIDER_PATH`). See SETUP.md for
-`packages.decider-server` and how to start it; state lives in
-`~/.pi/agent/decider/state.json`.
+default, override with `DECIDER_URL` / `DECIDER_PATH`).
+
+On/off state is **session-scoped and in memory**: it is keyed by session id and
+dropped on `session_shutdown`. Nothing is written to `~/.pi`, so starting a new
+session means a fresh decision — which is the point, because "am I willing to
+spend battery on this" is a question about the conversation you are in, not a
+global preference. `/reload` also resets it.
 
 ## Attribution
 
