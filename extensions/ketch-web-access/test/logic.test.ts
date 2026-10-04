@@ -127,8 +127,18 @@ test("vttToText strips WebVTT markup, timing marks and rolling duplicates", () =
     "For those that are new,",
   ].join("\n");
 
-  assert.equal(vttToText(vtt), "Welcome back.\nFor those that are new,");
+  assert.equal(vttToText(vtt), "[00:00] Welcome back.\n[00:04] For those that are new,");
+  assert.equal(vttToText(vtt, { timestamps: false }), "Welcome back.\nFor those that are new,");
   assert.equal(vttToText(""), "");
+});
+
+test("vttToText keeps the timestamp that a moment can be found by", () => {
+  const vtt = ["WEBVTT", "", "00:07:55.000 --> 00:07:58.000", "The interesting bit", "", "00:09:00.000 --> 00:09:02.000", "Something else"].join("\n");
+  const text = vttToText(vtt);
+  assert.match(text, /^\[07:55\] The interesting bit$/m);
+  assert.match(text, /^\[09:00\] Something else$/m);
+  // This is what makes "what happens at 7:57" answerable without a parser.
+  assert.ok(text.includes("[07:55]"), "a cue near 7:57 must carry its time");
 });
 
 test("formatSearchText links every result or says so", () => {

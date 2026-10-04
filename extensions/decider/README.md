@@ -23,6 +23,8 @@ in context. So:
   when it is loaded, and remembers the answer either way
 - a refusal is remembered for the rest of **that session**; the next session
   asks afresh
+- **no answer is never treated as a no**: if the question cannot be asked,
+  nothing is remembered and the model is told to ask the user itself
 - **subagents never load it**: a child session has no user to ask, so `decide`
   returns "unavailable, decide without it"
 - an unreachable service costs nothing — no weights, no memory, just a note

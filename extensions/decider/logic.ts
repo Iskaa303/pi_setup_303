@@ -73,8 +73,22 @@ export function isChildSession(ctx: { sessionManager?: unknown }): boolean {
 }
 
 export function findAskTool(ctx: { tools?: unknown }): string | undefined {
-  const names = (ctx.tools ?? []) as string[];
+  // ctx.tools is not guaranteed to be a list of plain strings — accept either
+  // "name" or { name } entries, because guessing wrong here means the user is
+  // never asked anything.
+  const entries = (ctx.tools ?? []) as Array<string | { name?: string }>;
+  const names = entries.map((entry) => (typeof entry === "string" ? entry : (entry?.name ?? "")));
   return ASK_TOOLS.find((candidate) => names.includes(candidate));
+}
+
+/** Whether the ask tool answered "turn it on" in whatever shape it replied. */
+export function readGrant(reply: unknown): boolean | undefined {
+  const answers = (reply as { details?: { answers?: unknown } })?.details?.answers;
+  if (answers === undefined || answers === null) return undefined;
+  const raw = JSON.stringify(answers);
+  if (/keep it off/i.test(raw)) return false;
+  if (/turn it on/i.test(raw)) return true;
+  return undefined;
 }
 
 export interface HttpReply {

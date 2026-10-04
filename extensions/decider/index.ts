@@ -28,21 +28,25 @@ import {
   isChildSession,
   normaliseAnswer,
   post,
+  readGrant,
   SessionStore,
   type State,
 } from "./logic.js";
 
 const DecideParams = Type.Object({
   state: Type.String({ description: "The text the decision is about: the user request, tool output, error, or diff." }),
-  questions: Type.Record(
-    Type.String(),
+  questions: Type.Array(
     Type.Object({
+      name: Type.String({ description: "Short identifier for the question, e.g. route or urgent." }),
       type: Type.Union([Type.Literal("choice"), Type.Literal("noul"), Type.Literal("score")]),
       instructions: Type.String(),
       criteria: Type.Optional(Type.Union([Type.Record(Type.String(), Type.String()), Type.Array(Type.String())])),
     }),
-    { description: 'Named questions, e.g. {route: {type: "choice", instructions: "...", criteria: {web: "...", code: "..."}}}' },
+    { description: 'The questions to answer, e.g. [{name: "route", type: "choice", instructions: "...", criteria: {web: "...", code: "..."}}]' },
   ),
+  permission: Type.Optional(Type.Boolean({
+    description: "Set on the retry, after the user answered whether to load this model: true if they said yes, false if they said no.",
+  })),
   threshold: Type.Optional(Type.Number({ description: "Escalate when confidence is below this (default 0.8)." })),
 });
 type DecideArgs = Static<typeof DecideParams>;
@@ -91,12 +95,14 @@ export default function decider(pi: ExtensionAPI): void {
     name: "system_one_decide",
     label: "System One decision (local model)",
     description:
-      "Ask the local decider-4b model a set of typed choice/noul/score questions about a piece of text and get calibrated probabilities in one forward pass. Use it for routing (which tool, which surface) and for escalate-or-not decisions. Off by default: the first call asks the user for permission and remembers the answer.",
+      "Ask the local decider-4b model a set of typed choice/noul/score questions about a piece of text and get calibrated probabilities in one forward pass. Use it for routing (which tool, which surface) and for escalate-or-not decisions. Off by default: the first call asks the user for permission, and remembers the answer either way.",
     promptSnippet:
       "system_one_decide: typed choice/noul/score questions with calibrated probabilities from a local model; only for routing and escalate-or-not calls, never for facts.",
     promptGuidelines: [
       "Call it as system_one_decide (the extension is named decider; the tool is not).",
-      "Ask one call with several questions — they share a single forward pass.",
+      "questions is a LIST of {name, type, instructions, criteria} objects.",
+      "If the result says the model is off and unauthorised, ask the user with ask_user_question (\"load the local decision model?\"), then call system_one_decide again with permission: true or false.",
+      "One call with several questions — they share a single forward pass.",
       "Give options explicit descriptions in `criteria`; bare labels give the model nothing to score.",
       "If an answer comes back as escalate, do the careful thing yourself instead of guessing.",
     ],
@@ -109,13 +115,30 @@ export default function decider(pi: ExtensionAPI): void {
       if (state.declined && !state.enabled) return textResult(disabledText("you turned it off for this session"));
 
       if (!state.enabled) {
-        const granted = await askPermission(ctx, store, id);
-        if (!granted) return textResult(disabledText("you declined permission to load it"));
+        // The model relays the answer back, so the user is never asked by us
+        // directly and nothing is assumed on their behalf.
+        if (params.permission === undefined) {
+          const asked = await askPermission(ctx, store, id);
+          if (asked === undefined) {
+            return textResult(
+              "The local decision model is off and I cannot ask you from inside a tool. Ask the user with ask_user_question (\"load the local decision model (decider-4b, 4B params)?\", options \"Turn it on\" / \"Keep it off\"), then call system_one_decide again with permission: true or false. Do not retry without asking.",
+            );
+          }
+          if (!asked) return textResult(disabledText("the user declined permission to load it"));
+        } else {
+          store.set(id, params.permission ? { enabled: true, declined: false } : { enabled: false, declined: true, declinedAt: Date.now() });
+          if (!params.permission) return textResult(disabledText("you declined permission to load it"));
+        }
       }
 
+      const questions = params.questions.reduce<Record<string, unknown>>((all, question) => {
+        const { name, ...rest } = question;
+        all[name] = rest;
+        return all;
+      }, {});
       const reply = await post(
         url(),
-        { model: process.env.DECIDER_MODEL ?? "decider-4b", state: params.state, questions: params.questions },
+        { model: process.env.DECIDER_MODEL ?? "decider-4b", state: params.state, questions },
         180_000,
       );
       if (reply.error || reply.status !== 0) {
@@ -162,35 +185,39 @@ export default function decider(pi: ExtensionAPI): void {
 }
 
 /** Ask once through rpiv-ask-user-question, remembering the answer for this session. */
-async function askPermission(ctx: ExtensionContext, store: SessionStore, sessionId: string): Promise<boolean> {
+/**
+ * Try to ask through rpiv-ask-user-question.
+ * Returns undefined when no answer was obtained (so nothing is remembered),
+ * true when the user said yes, false when they said no.
+ */
+async function askPermission(ctx: ExtensionContext, store: SessionStore, sessionId: string): Promise<boolean | undefined> {
   const tool = findAskTool(ctx as unknown as { tools?: unknown });
   if (!tool) {
-    // No ask tool loaded: make the model do the asking, and treat silence as a no.
-    ctx.ui?.notify?.("decider is off. Ask the user whether to load the local model, or run /decider on.", "warning");
-    store.set(sessionId, { enabled: false, declined: true, declinedAt: Date.now() });
-    return false;
+    ctx.ui?.notify?.("decider is off until you say otherwise: /decider on, or answer when the model asks.", "warning");
+    return undefined;
   }
 
-  let granted = false;
+  let granted: boolean | undefined;
   try {
-    const reply = (await ctx.executeTool(tool, {
+    const reply = await ctx.executeTool(tool, {
       questions: [
         {
           header: "decider",
           question: "The local decision model (decider-4b, 4B params) is off. Load it when you need routing or escalate-or-not decisions?",
           options: [
             { label: "Keep it off", description: "No model load, no extra battery. /decider on later if you change your mind." },
-            { label: "Turn it on", description: "Loads ~8GB of weights on first use and answers decide calls." },
+            { label: "Turn it on", description: "Loads ~8GB of weights on first use and answers these calls." },
           ],
         },
       ],
-    })) as { details?: { answers?: Record<string, unknown> } };
-    const raw = JSON.stringify(reply?.details?.answers ?? reply);
-    granted = /turn it on/i.test(raw) && !/keep it off/i.test(raw);
-  } catch {
-    granted = false;
+    });
+    granted = readGrant(reply);
+  } catch (error) {
+    ctx.ui?.notify?.(`decider could not ask (${error instanceof Error ? error.message : String(error)}). It stays off; /decider on enables it.`, "warning");
+    return undefined;
   }
 
+  if (granted === undefined) return undefined;
   store.set(sessionId, granted ? { enabled: true, declined: false } : { enabled: false, declined: true, declinedAt: Date.now() });
   ctx.ui?.notify?.(granted ? "decider enabled for this session" : "decider stays off for this session", granted ? "info" : "warning");
   return granted;

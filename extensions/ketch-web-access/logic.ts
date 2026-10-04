@@ -340,11 +340,35 @@ export function isVideoUrl(url: string): boolean {
  * YouTube auto-captions ship as WebVTT with rolling-caption duplicates (every
  * line repeats as the caption scrolls) and inline <00:00:01.234> timing marks.
  * Strip both, otherwise the transcript is twice as long and full of <>.
+ *
+ * Lines keep an [MM:SS] prefix: without it "what is at 7:57" is unanswerable,
+ * because nothing downstream knows when a cue happened.
  */
-export function vttToText(vtt: string): string {
+export function vttToText(vtt: string, options: { timestamps?: boolean } = {}): string {
+  const withTimestamps = options.timestamps !== false;
   const lines = vtt.replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
+  let lastBody: string | undefined;
   let started = false;
+  let prefix = "";
+  let cue: string[] = [];
+
+  const emit = () => {
+    const body = cue
+      .join(" ")
+      .replace(/<[^>]*>/g, "")
+      .replace(/\d{1,2}:\d{2}:\d{2}[.,]\d{3}/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    cue = [];
+    if (!body) return;
+    // Rolling captions repeat the same text at a later timestamp, so compare
+    // bodies, not the prefixed lines, and keep the first time it was said.
+    if (body === lastBody) return;
+    lastBody = body;
+    out.push(withTimestamps ? prefix + body : body);
+  };
+
   for (const raw of lines) {
     const line = raw.trim();
     if (!started) {
@@ -352,20 +376,20 @@ export function vttToText(vtt: string): string {
       if (line === "") started = true;
       continue;
     }
+    const timing = /^(\d{1,2}):(\d{2}):(\d{2})[.,]\d{3}\s+-->/.exec(line);
+    if (timing) {
+      emit();
+      const seconds = Number(timing[1]) * 3600 + Number(timing[2]) * 60 + Number(timing[3]);
+      prefix = `[${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}] `;
+      continue;
+    }
     if (!line) continue;
     if (line.startsWith("WEBVTT") || line.startsWith("NOTE") || line.startsWith("Kind:") || line.startsWith("Language:")) continue;
-    if (line.includes("-->")) continue;
     // Cue identifiers ("1", "42") sit alone on their own line before the timing.
     if (/^\d+$/.test(line)) continue;
-    const text = line
-      .replace(/<[^>]*>/g, "")
-      .replace(/\d{1,2}:\d{2}:\d{2}[.,]\d{3}/g, "")
-      .trim();
-    if (!text) continue;
-    // Rolling captions repeat the previous line; keep only the change.
-    if (out[out.length - 1] === text) continue;
-    out.push(text);
+    cue.push(line);
   }
+  emit();
   return out.join("\n");
 }
 

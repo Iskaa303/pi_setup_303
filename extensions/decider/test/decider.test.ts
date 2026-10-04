@@ -1,7 +1,7 @@
 // Run: node --experimental-strip-types --test test/decider.test.ts
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { normaliseAnswer, SessionStore } from "../logic.ts";
+import { findAskTool, normaliseAnswer, readGrant, SessionStore } from "../logic.ts";
 
 test("a session starts off and nothing has been decided yet", () => {
   const store = new SessionStore();
@@ -37,6 +37,21 @@ test("dropping a session forgets its decision", () => {
   store.drop("s1");
   assert.equal(store.size, 1);
   assert.deepEqual(store.get("s1"), { enabled: false });
+});
+
+test("findAskTool accepts both string and object tool lists", () => {
+  assert.equal(findAskTool({ tools: ["read", "ask_user_question"] }), "ask_user_question");
+  assert.equal(findAskTool({ tools: [{ name: "read" }, { name: "ask_user_question" }] }), "ask_user_question");
+  assert.equal(findAskTool({ tools: [] }), undefined);
+  assert.equal(findAskTool({}), undefined);
+});
+
+test("readGrant only reports an actual answer, never a guess", () => {
+  assert.equal(readGrant({ details: { answers: { decider: "Turn it on" } } }), true);
+  assert.equal(readGrant({ details: { answers: { decider: "Keep it off" } } }), false);
+  assert.equal(readGrant({ details: { answers: {} } }), undefined, "an empty answer is not consent");
+  assert.equal(readGrant({ details: {} }), undefined);
+  assert.equal(readGrant(undefined), undefined);
 });
 
 test("normaliseAnswer ranks options and flags low confidence for escalation", () => {
