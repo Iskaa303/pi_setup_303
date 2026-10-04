@@ -44,6 +44,7 @@ hm = {
 | `programs.pi-setup.settings` | `{}` | the rest of `settings.json` |
 | `programs.pi-setup.ketch` | `pkgs.ketch` | added to `home.packages`, `KETCH_BIN` set |
 | `programs.pi-setup.camoufox` | `false` | `CAMOUFOX_JS` points at the nix-built client |
+| `programs.pi-setup.videoTools` | `true` | ffmpeg + yt-dlp on PATH for transcripts and frames |
 
 `~/.pi/agent/settings.json` becomes a symlink into the store:
 
@@ -91,7 +92,6 @@ depends on it.
 | `rpiv-ask-user-question`, `rpiv-todo` | `@juicesharp/rpiv-config`, typebox |
 | `pi-notify` | `@leo-alvarenga/pi-ext-core` and its deps |
 | `pi-statusline` | `@narumitw/pi-tui-kit` and its deps |
-| `pi-fff` | `@ff-labs/fff-node`, `@ff-labs/fff-bun` |
 
 ## The decider service
 

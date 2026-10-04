@@ -41,9 +41,14 @@ The status line shows `decider: on` / `off` / `declined` through
 
 ## The tool
 
+It is called `system_one_decide`, not `decide` and not `decider` (the extension
+is `decider`, the tool is `system_one_decide` — an earlier build shipped it as
+`decide`, which read as too close to the extension name and got called
+wrong).
+
 ```jsonc
 // one call, several questions, one forward pass
-decide({
+system_one_decide({
   state: "Tool 'ketch_browser' is not a browser… /tmp/x 404 …",
   questions: {
     route:  { type: "choice", instructions: "How should this be handled?",

@@ -88,13 +88,14 @@ export default function decider(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
-    name: "decide",
-    label: "Decide (local model)",
+    name: "system_one_decide",
+    label: "System One decision (local model)",
     description:
       "Ask the local decider-4b model a set of typed choice/noul/score questions about a piece of text and get calibrated probabilities in one forward pass. Use it for routing (which tool, which surface) and for escalate-or-not decisions. Off by default: the first call asks the user for permission and remembers the answer.",
     promptSnippet:
-      "decide: typed choice/noul/score questions with calibrated probabilities from a local model; only for routing and escalate-or-not calls, never for facts.",
+      "system_one_decide: typed choice/noul/score questions with calibrated probabilities from a local model; only for routing and escalate-or-not calls, never for facts.",
     promptGuidelines: [
+      "Call it as system_one_decide (the extension is named decider; the tool is not).",
       "Ask one call with several questions — they share a single forward pass.",
       "Give options explicit descriptions in `criteria`; bare labels give the model nothing to score.",
       "If an answer comes back as escalate, do the careful thing yourself instead of guessing.",

@@ -427,6 +427,16 @@
               description = "The ketch CLI that ketch-web-access shells out to.";
             };
 
+            videoTools = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = ''
+                Put ffmpeg and yt-dlp on PATH. ketch-web-access uses them for
+                video transcripts and frame extraction; without them a video URL
+                only returns its page.
+              '';
+            };
+
             camoufox = lib.mkOption {
               type = lib.types.bool;
               default = false;
@@ -439,7 +449,7 @@
           };
 
           config = lib.mkIf cfg.enable {
-            home.packages = [ cfg.ketch ];
+            home.packages = [ cfg.ketch ] ++ lib.optionals cfg.videoTools [ pkgs.ffmpeg pkgs.yt-dlp ];
 
             # ~/.pi/agent/extensions/<name> -> /nix/store/... so pi finds each
             # extension by its real name instead of a store hash.

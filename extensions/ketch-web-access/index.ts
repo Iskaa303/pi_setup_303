@@ -21,7 +21,7 @@
  * Requires the `ketch` binary on PATH (or KETCH_BIN set).
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -154,6 +154,20 @@ async function searchQuery(
   if (run.code !== 0 && run.code !== 3) throw new Error(failureText(run));
   const parsed = parseJson<SearchResult[]>(run.stdout);
   return Array.isArray(parsed) ? parsed.filter((result) => typeof result?.url === "string") : [];
+}
+
+/** Transcript and frame support, resolved once so the model does not have to. */
+function videoCapabilities(): string {
+  const yt = hasBinary("yt-dlp");
+  const ff = hasBinary("ffmpeg");
+  if (yt && ff) return "Video: transcripts (yt-dlp) and frame extraction (ffmpeg) are both available; `fetch_content` on a video URL just works.";
+  if (yt) return "Video: transcripts (yt-dlp) are available; frame extraction needs ffmpeg, which is not installed.";
+  if (ff) return "Video: frame extraction (ffmpeg) is available; transcripts need yt-dlp, which is not installed.";
+  return "Video: neither yt-dlp nor ffmpeg is installed, so a video URL will only return its page.";
+}
+
+function hasBinary(name: string): boolean {
+  return spawnSync("sh", ["-c", `command -v ${name}`], { stdio: "ignore" }).status === 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +475,32 @@ type BrowserArgs = Static<typeof BrowserParams>;
 // ---------------------------------------------------------------------------
 
 export default function ketchWebAccess(pi: ExtensionAPI): void {
+  // Tell the model what this machine can actually do, so it stops probing with
+  // `which` and stops reaching for the HTTP path when a real browser is ready.
+  let capabilities: string | undefined;
+  const capabilitiesSection = async () => {
+    if (capabilities === undefined) {
+      const camoufox = process.env.CAMOUFOX_JS ? await camoufoxReport() : undefined;
+      const lines = [
+        camoufox?.ok
+          ? 'Web fetching: engine "camoufox" (a real patched Firefox) is installed and ready. Prefer it for bot-walled, Cloudflare-style or JavaScript-gated pages, and for video transcripts. Do not probe for it: it is there.'
+          : 'Web fetching: engine "camoufox" is not installed. Use the default Ketch renderer (HTTP, then headless Chromium) and do not try engine "camoufox".',
+        "Web search: `web_search` with 2-4 queries, then `fetch_content` on the sources you intend to rely on.",
+        videoCapabilities(),
+      ];
+      capabilities = lines.filter(Boolean).join("\n");
+    }
+    return capabilities;
+  };
+
+  pi.on("before_agent_start", async (event) => {
+    const section = await capabilitiesSection();
+    if (section) {
+      event.systemPromptOptions.sections ??= {};
+      event.systemPromptOptions.sections.web_fetching = section;
+    }
+  });
+
   // ---------------------------------------------------------------- web_search
   pi.registerTool(
     defineTool({
