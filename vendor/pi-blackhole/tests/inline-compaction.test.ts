@@ -18,6 +18,7 @@ import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import {
   compactInlineAtTurnBoundary,
   getCapturedCompactionSettings,
+  getCompactionIneligibility,
   getPrepareCompactionStatus,
   InlineCompactionUnavailableError,
   installHostInlineCompactionAdapter,
@@ -168,6 +169,85 @@ function createSessionClass(options: {
       }
     }
   };
+}
+
+interface RecordedInlineEvent {
+  type: string;
+  reason?: string;
+  source?: string;
+  seq?: string;
+  message?: unknown;
+}
+
+/**
+ * Session whose `compact()` emits the public event sequence Pi produces for a
+ * manual compaction, so tests can observe what the adapter relabels while it
+ * shadows `_emit`. Each event carries a `seq` sentinel to locate it after the
+ * list has been rewritten.
+ */
+function createEmittingSessionClass() {
+  class EmittingSession {
+    compactCalls = 0;
+    events: RecordedInlineEvent[] = [];
+    _compactionAbortController: AbortController | undefined;
+
+    sessionManager = {
+      buildSessionContext: vi.fn(() => ({ messages: [] as unknown[] })),
+      appendCompaction: vi.fn(),
+    };
+
+    agent = {
+      state: { messages: [] as unknown[] },
+      prepareNextTurnWithContext: vi.fn(),
+    };
+
+    async abort(): Promise<void> {
+      this._compactionAbortController?.abort();
+    }
+
+    _bindExtensionCore(runner: unknown): void {
+      void runner;
+    }
+
+    _emit(event: unknown): void {
+      this.events.push(event as RecordedInlineEvent);
+    }
+
+    async compact(): Promise<CompactionResult> {
+      await this.abort();
+      this._compactionAbortController = new AbortController();
+      this._emit({ type: "compaction_start", reason: "manual", seq: "manual-start" });
+      this._emit({ type: "compaction_start", reason: "overflow", seq: "overflow-start" });
+      this._emit({
+        type: "compaction_end",
+        reason: "manual",
+        seq: "manual-end",
+      });
+      this._emit({
+        type: "summarization_retry_attempt_start",
+        source: "compaction",
+        reason: "manual",
+        seq: "compaction-retry",
+      });
+      this._emit({
+        type: "summarization_retry_attempt_start",
+        source: "branchSummary",
+        reason: "manual",
+        seq: "branch-retry",
+      });
+      this._emit({
+        type: "message_start",
+        message: { role: "user", content: "passthrough" },
+        seq: "passthrough",
+      });
+      this.compactCalls += 1;
+      this.sessionManager.appendCompaction();
+      this.agent.state.messages = [{ role: "assistant", content: "kept" }];
+      this._compactionAbortController = undefined;
+      return { summary: "summary", firstKeptEntryId: "kept", tokensBefore: 1 };
+    }
+  }
+  return EmittingSession;
 }
 
 async function refreshNextTurn(session: InstanceType<ReturnType<typeof createSessionClass>>) {
@@ -1653,6 +1733,131 @@ describe("Blackhole inline compaction adapter", () => {
     expect(isCompactionEligible(session.sessionManager, [])).toBe(true);
   });
 
+  // ── getCompactionIneligibility: which refusal, not just whether ───────────
+  //
+  // Pi's manual compact() throws two distinct refusals for the same undefined
+  // preparation ("Already compacted" vs "Nothing to compact (session too
+  // small)"). The manual command needs to say which one it hit.
+
+  function bindProbeSession(
+    prepare: ((entries: unknown[], settings: unknown) => unknown) | undefined,
+    getCompactionSettings: (model?: unknown) => unknown = () => ({
+      enabled: true,
+      reserveTokens: 1000,
+      keepRecentTokens: 20_000,
+    }),
+  ) {
+    const SessionClass = createSessionClass({ legacyDisconnect: false });
+    installInlineCompactionAdapter({
+      sessionClass: SessionClass as never,
+      prepareCompaction: prepare as never,
+    });
+    const session = new SessionClass();
+    (session as any).settingsManager = { getCompactionSettings };
+    session._bindExtensionCore({});
+    return session.sessionManager;
+  }
+
+  it("reports too_small when the preparation is undefined and the branch ends in a message", () => {
+    const manager = bindProbeSession(() => undefined);
+    const entries = [{ id: "e1", type: "message" }];
+    expect(getCompactionIneligibility(manager, entries)).toBe("too_small");
+  });
+
+  it("reports already_compacted when the branch ends in a compaction entry", () => {
+    const manager = bindProbeSession(() => undefined);
+    const entries = [
+      { id: "m1", type: "message" },
+      { id: "c1", type: "compaction" },
+    ];
+    expect(getCompactionIneligibility(manager, entries)).toBe("already_compacted");
+  });
+
+  it("reports no ineligibility when the host returns a preparation", () => {
+    const manager = bindProbeSession(() => ({ firstKeptEntryId: "e1" }));
+    expect(getCompactionIneligibility(manager, [{ id: "e1", type: "message" }])).toBeNull();
+  });
+
+  it("reports no ineligibility when prepareCompaction throws (fail open)", () => {
+    const manager = bindProbeSession(() => {
+      throw new Error("unexpected error");
+    });
+    expect(getCompactionIneligibility(manager, [{ id: "e1", type: "message" }])).toBeNull();
+  });
+
+  it("reports no ineligibility when prepareCompaction is unavailable (fail open)", () => {
+    const manager = bindProbeSession(undefined);
+    expect(getCompactionIneligibility(manager, [{ id: "e1", type: "message" }])).toBeNull();
+  });
+
+  it("reports no ineligibility when the settingsManager getter throws (fail open)", () => {
+    const manager = bindProbeSession(
+      () => undefined,
+      () => {
+        throw new Error("corrupt settings");
+      },
+    );
+    expect(getCompactionIneligibility(manager, [{ id: "e1", type: "message" }])).toBeNull();
+  });
+
+  it("resolves settings with the session model, so a per-model keepRecentTokens override decides", () => {
+    // Pi resolves compaction.modelOverrides["<provider>/<id>"] through
+    // getCompactionSettings(model); probing without the model answers a
+    // different question than the host will ask.
+    const manager = bindProbeSession(
+      (_entries, settings) =>
+        (settings as { keepRecentTokens: number }).keepRecentTokens >= 100_000
+          ? { firstKeptEntryId: "e1" }
+          : undefined,
+      (model) => ({
+        enabled: true,
+        reserveTokens: 1000,
+        keepRecentTokens: (model as { id?: string })?.id === "big-window" ? 200_000 : 20_000,
+      }),
+    );
+    const entries = [{ id: "e1", type: "message" }];
+    expect(
+      getCompactionIneligibility(manager, entries, undefined, {
+        provider: "anthropic",
+        id: "big-window",
+      }),
+    ).toBeNull();
+  });
+
+  it("reports too_small when no model override applies to the session model", () => {
+    const manager = bindProbeSession(
+      (_entries, settings) =>
+        (settings as { keepRecentTokens: number }).keepRecentTokens >= 100_000
+          ? { firstKeptEntryId: "e1" }
+          : undefined,
+      (model) => ({
+        enabled: true,
+        reserveTokens: 1000,
+        keepRecentTokens: (model as { id?: string })?.id === "big-window" ? 200_000 : 20_000,
+      }),
+    );
+    const entries = [{ id: "e1", type: "message" }];
+    expect(
+      getCompactionIneligibility(manager, entries, undefined, {
+        provider: "anthropic",
+        id: "small",
+      }),
+    ).toBe("too_small");
+  });
+
+  it("keeps isCompactionEligible in agreement with the ineligibility reason", () => {
+    const entries = [{ id: "e1", type: "message" }];
+    const eligible = bindProbeSession(() => ({ firstKeptEntryId: "e1" }));
+    const ineligible = bindProbeSession(() => undefined);
+
+    expect(isCompactionEligible(eligible, entries)).toBe(
+      getCompactionIneligibility(eligible, entries) === null,
+    );
+    expect(isCompactionEligible(ineligible, entries)).toBe(
+      getCompactionIneligibility(ineligible, entries) === null,
+    );
+  });
+
   it("resolves prepareCompaction from the host package root via installHostInlineCompactionAdapter", async () => {
     const cliPath = join(
       process.cwd(),
@@ -1797,8 +2002,13 @@ describe("Blackhole inline compaction adapter", () => {
       ]);
 
       const savedCompactions: CompactionResult[] = [];
+      const compactionReasons: { start: string[]; end: string[] } = { start: [], end: [] };
       harness.session.subscribe((event) => {
-        if (event.type === "compaction_end" && event.result) savedCompactions.push(event.result);
+        if (event.type === "compaction_start") compactionReasons.start.push(event.reason);
+        if (event.type === "compaction_end") {
+          compactionReasons.end.push(event.reason);
+          if (event.result) savedCompactions.push(event.result);
+        }
       });
 
       let activeRunSignal: AbortSignal | undefined;
@@ -1852,6 +2062,11 @@ describe("Blackhole inline compaction adapter", () => {
       expect(activeRunSignal?.aborted).toBe(false);
       expect(runtime.compactInFlight).toBe(false);
       expect(savedCompactions).toHaveLength(1);
+      // RPC/SDK clients distinguish a user-initiated manual compaction from an
+      // automatic in-run one by this reason; an inline attempt must not end the
+      // still-open turn ([#150](https://github.com/k0valik/pi-blackhole/issues/150)).
+      expect(compactionReasons.start).toEqual(["threshold"]);
+      expect(compactionReasons.end).toEqual(["threshold"]);
 
       // Persisted identity: one compaction entry exists in the branch, and the
       // context Pi keeps after it starts at the entry it retained.
@@ -1887,6 +2102,62 @@ describe("Blackhole inline compaction adapter", () => {
       harness.cleanup();
     }
   }
+
+  describe("inline event reason relabeling", () => {
+    async function compactEmitting(SessionClass: ReturnType<typeof createEmittingSessionClass>) {
+      installInlineCompactionAdapter({ sessionClass: SessionClass as never });
+      const session = new SessionClass();
+      session._bindExtensionCore({});
+      await compactInlineAtTurnBoundary(session.sessionManager);
+      return session;
+    }
+
+    it("reports an inline compaction_start as threshold, not manual", async () => {
+      const session = await compactEmitting(createEmittingSessionClass());
+      expect(session.events.find((event) => event.seq === "manual-start")?.reason).toBe(
+        "threshold",
+      );
+    });
+
+    it("leaves a non-manual compaction_start reason untouched", async () => {
+      const session = await compactEmitting(createEmittingSessionClass());
+      expect(session.events.find((event) => event.seq === "overflow-start")?.reason).toBe(
+        "overflow",
+      );
+    });
+
+    it("reports an inline compaction_end as threshold, not manual", async () => {
+      const session = await compactEmitting(createEmittingSessionClass());
+      expect(session.events.find((event) => event.seq === "manual-end")?.reason).toBe("threshold");
+    });
+
+    it("relabels compaction-source summarization retries", async () => {
+      const session = await compactEmitting(createEmittingSessionClass());
+      expect(session.events.find((event) => event.seq === "compaction-retry")?.reason).toBe(
+        "threshold",
+      );
+    });
+
+    it("leaves branch-summary retries untouched", async () => {
+      const session = await compactEmitting(createEmittingSessionClass());
+      expect(session.events.find((event) => event.seq === "branch-retry")?.reason).toBe("manual");
+    });
+
+    it("passes unrelated events through unchanged", async () => {
+      const session = await compactEmitting(createEmittingSessionClass());
+      const event = session.events.find((entry) => entry.seq === "passthrough");
+      expect(event?.type).toBe("message_start");
+      expect(event?.reason).toBeUndefined();
+      expect(event?.message).toEqual({ role: "user", content: "passthrough" });
+    });
+
+    it("restores _emit after the inline attempt", async () => {
+      const session = await compactEmitting(createEmittingSessionClass());
+      expect(Object.prototype.hasOwnProperty.call(session, "_emit")).toBe(false);
+      session._emit({ type: "compaction_start", reason: "manual", seq: "after" });
+      expect(session.events.find((event) => event.seq === "after")?.reason).toBe("manual");
+    });
+  });
 
   describe("turn_end compaction through a live agent run", () => {
     it("compacts with an injected host helper before the next provider request", async () => {

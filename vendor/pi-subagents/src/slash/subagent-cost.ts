@@ -3,7 +3,7 @@ import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getArtifactPaths, getArtifactsDir } from "../shared/artifacts.ts";
 import { formatTokens } from "../shared/formatters.ts";
-import { DIRS, SLASH_RESULT_TYPE, type Details, type SingleResult, type SubagentState, type Usage } from "../shared/types.ts";
+import { DIRS, SLASH_RESULT_TYPE, type Details, type SubagentState, type Usage } from "../shared/types.ts";
 import { readStatus } from "../shared/utils.ts";
 import { readWorkflowReceipt } from "../workflows/workflow-receipt.ts";
 import { resolveSlashMessageDetails } from "./slash-live-state.ts";
@@ -124,10 +124,11 @@ function detailsFromSessionEntry(entry: unknown): Details | undefined {
 function metadataUsage(
 	artifactsDirs: string[],
 	input: { runId: string; agent: string },
+	indexes: ReadonlyArray<number | undefined> = [0, undefined],
 ): Usage | undefined {
 	if (!/^[A-Za-z0-9._-]+$/.test(input.runId)) return undefined;
 	for (const artifactsDir of artifactsDirs) {
-		for (const index of [0, undefined] as const) {
+		for (const index of indexes) {
 			const metadataPath = getArtifactPaths(artifactsDir, input.runId, input.agent, index).metadataPath;
 			try {
 				const metadata = readUsageMetadata(metadataPath);
@@ -146,7 +147,8 @@ function metadataUsage(
 /**
  * Collect parent and child usage for the current session branch. Foreground
  * children come from persisted `subagent`/`bg_wait` tool-result details; async
- * workflow children are resolved through receipts and artifact metadata.
+ * workflow children are resolved through receipts, and other async runs through
+ * their status steps, then artifact metadata.
  */
 export function collectSubagentCost(
 	ctx: ExtensionContext,
@@ -158,11 +160,13 @@ export function collectSubagentCost(
 	const children: SubagentCostChild[] = [];
 	const seenChildren = new Set<string>();
 	const workflowRunIds = new Set<string>();
+	const asyncRunIds = new Set<string>();
+	const completedRunIds = new Set<string>();
 	let unresolvedAsyncChildren = 0;
 
-	const addChild = (input: { agent?: string; runId?: string; usage?: Usage; sessionFile?: string }): boolean => {
+	const addChild = (input: { agent?: string; runId?: string; identity?: string; usage?: Usage; sessionFile?: string }): boolean => {
 		if (!input.usage || !usageHasValue(input.usage)) return false;
-		const identity = input.runId ? `run:${input.runId}` : input.sessionFile ? `session:${input.sessionFile}` : undefined;
+		const identity = input.identity ?? (input.runId ? `run:${input.runId}` : input.sessionFile ? `session:${input.sessionFile}` : undefined);
 		if (identity && seenChildren.has(identity)) return true;
 		if (identity) seenChildren.add(identity);
 		const usage = { ...input.usage };
@@ -183,13 +187,16 @@ export function collectSubagentCost(
 		if (parentUsage) addUsage(parent, parentUsage);
 		const details = detailsFromSessionEntry(entry);
 		if (!details) continue;
-		if (details.mode === "workflow" && details.runId) workflowRunIds.add(details.runId);
+		// Only async workflows persist a receipt file; foreground workflow child usage is already in results.
+		if (details.mode === "workflow" && details.runId && details.asyncId) workflowRunIds.add(details.runId);
+		// An async launch result has no child results; its usage lands in run artifacts.
+		else if (details.asyncId && details.results.length === 0) asyncRunIds.add(details.asyncId);
 		for (const result of details.results) {
-			const resultRunId = (result as SingleResult & { runId?: unknown }).runId;
-			addChild({ agent: result.agent, runId: typeof resultRunId === "string" ? resultRunId : undefined, usage: usageFromValue(result.usage), sessionFile: result.sessionFile });
+			addChild({ agent: result.agent, runId: typeof result.runId === "string" ? result.runId : undefined, usage: usageFromValue(result.usage), sessionFile: result.sessionFile });
 		}
 		for (const completion of details.completions ?? []) {
 			if (completion.mode === "workflow") workflowRunIds.add(completion.runId);
+			completedRunIds.add(completion.runId);
 			for (const result of completion.results ?? []) {
 				addChild({ agent: result.agent, runId: result.runId, usage: usageFromValue(result.usage), sessionFile: result.sessionFile });
 			}
@@ -241,7 +248,37 @@ export function collectSubagentCost(
 				if (!usage || !addChild({ ...ref, usage })) unresolvedAsyncChildren += 1;
 			}
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.error(`Failed to resolve async subagent usage for '${workflowRunId}':`, error);
+			// Without a receipt, a bg_wait completion cannot prove it reported every child (a stopped workflow may omit one).
+			unresolvedAsyncChildren += 1;
+			// A running workflow has no receipt yet; readWorkflowReceipt keeps the ENOENT as its cause.
+			const missing = (error as NodeJS.ErrnoException).code === "ENOENT" || ((error as Error).cause as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+			if (!missing) console.error(`Failed to resolve async subagent usage for '${workflowRunId}':`, error);
+		}
+	}
+
+	for (const asyncRunId of asyncRunIds) {
+		// A bg_wait completion already reported this run's results; its children carry no child runId.
+		if (completedRunIds.has(asyncRunId)) continue;
+		try {
+			const status = readStatus(path.join(DIRS.async, asyncRunId));
+			if (!status?.steps?.length) {
+				unresolvedAsyncChildren += 1;
+				continue;
+			}
+			addArtifactsDir(status.cwd);
+			const steps = status.steps;
+			// The runner suffixes artifact names with the flat step index only for multi-step runs.
+			steps.forEach((step, index) => {
+				const flatIndex = steps.length > 1 ? index : undefined;
+				const usage = metadataUsage([...artifactsDirs], { runId: asyncRunId, agent: step.agent }, flatIndex === undefined ? [undefined, 0] : [flatIndex]);
+				const identity = flatIndex === undefined ? `run:${asyncRunId}` : `run:${asyncRunId}:${flatIndex}`;
+				// Pending and running steps have not finalized their metadata yet.
+				const settled = step.status !== "pending" && step.status !== "running";
+				if (!addChild({ agent: step.agent, runId: asyncRunId, identity, usage }) && settled) unresolvedAsyncChildren += 1;
+			});
+		} catch (error) {
+			unresolvedAsyncChildren += 1;
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.error(`Failed to resolve async subagent usage for '${asyncRunId}':`, error);
 		}
 	}
 

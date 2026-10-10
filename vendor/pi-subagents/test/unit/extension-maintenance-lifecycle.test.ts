@@ -19,19 +19,27 @@ const script = String.raw`
 	globalThis.clearTimeout = ((timer) => { active.delete(timer); return originalClearTimeout(timer); });
 	globalThis.clearInterval = ((timer) => { active.delete(timer); return originalClearInterval(timer); });
 	const { default: registerSubagentExtension } = await import("./src/extension/index.ts");
-	const events = { on() { return () => {}; }, emit() {} };
+	const { createEventBus } = await import("@earendil-works/pi-coding-agent");
+	const { registerInspector } = await import("./src/api/inspectors.ts");
+	const { getInspectorPlugins } = await import("./src/inspectors/plugins.ts");
+	const events = createEventBus();
 	const pi = new Proxy({
 		events,
 		on(name, handler) { const list = handlers.get(name) ?? []; list.push(handler); handlers.set(name, list); },
 		registerTool() {}, registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {}, sendMessage() {}, getSessionName() {},
 	}, { get(target, property) { return property in target ? target[property] : () => undefined; } });
 	const ctx = {
-		cwd: process.cwd(), hasUI: false, model: undefined,
+		cwd: process.cwd(), isIdle() { return false; }, hasUI: false, model: undefined,
 		ui: { setWidget() {}, theme: { fg(_name, text) { return text; }, bg(_name, text) { return text; }, bold(text) { return text; } } },
 		sessionManager: { getSessionId() { return "lifecycle-session"; }, getSessionFile() { return null; }, getEntries() { return []; } },
 		modelRegistry: { getAvailable() { return []; } },
 	};
 	registerSubagentExtension(pi);
+	registerInspector({ events }, {
+		name: "lifecycle-inspector", available: () => false, owns: () => false,
+		open: async () => { throw new Error("not available"); },
+	});
+	const inspectorsAtFactory = getInspectorPlugins(pi).map(plugin => plugin.name);
 	const atFactory = active.size;
 	for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
 	const atStart = active.size;
@@ -39,7 +47,8 @@ const script = String.raw`
 	const atRepeatedStart = active.size;
 	for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
 	const atShutdown = active.size;
-	process.stdout.write(JSON.stringify({ atFactory, atStart, atRepeatedStart, atShutdown }));
+	const inspectorsAtShutdown = getInspectorPlugins(pi).map(plugin => plugin.name);
+	process.stdout.write(JSON.stringify({ atFactory, atStart, atRepeatedStart, atShutdown, inspectorsAtFactory, inspectorsAtShutdown }));
 `;
 
 describe("extension maintenance lifecycle", () => {
@@ -48,6 +57,10 @@ describe("extension maintenance lifecycle", () => {
 			cwd: process.cwd(), encoding: "utf-8", env: { ...process.env, PI_SUBAGENT_CHILD: undefined },
 		});
 		assert.equal(result.status, 0, result.stderr);
-		assert.deepEqual(JSON.parse(result.stdout), { atFactory: 0, atStart: 3, atRepeatedStart: 3, atShutdown: 0 });
+		assert.deepEqual(JSON.parse(result.stdout), {
+			atFactory: 0, atStart: 3, atRepeatedStart: 3, atShutdown: 0,
+			inspectorsAtFactory: ["herdr", "ghostty", "tmux", "lifecycle-inspector"],
+			inspectorsAtShutdown: ["herdr", "ghostty", "tmux"],
+		});
 	});
 });

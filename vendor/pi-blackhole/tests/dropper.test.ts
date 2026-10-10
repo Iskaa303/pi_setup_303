@@ -69,6 +69,39 @@ describe("V3 dropper agent", () => {
     expect(finishTurn({ message: { stopReason: "toolUse" } })).toEqual({ action: "end" });
   });
 
+  it("forwards sessionId to the agent loop config", async () => {
+    let seenSessionId: unknown = "unset";
+    const loop = fakeAgentLoop((_prompts, _context, config) => {
+      seenSessionId = config.sessionId;
+    });
+
+    await runDropper({ ...baseArgs, agentLoop: loop, sessionId: "session-abc" });
+
+    expect(seenSessionId).toBe("session-abc");
+  });
+
+  it("forwards cacheRetention to the agent loop config", async () => {
+    let seenCacheRetention: unknown;
+    const loop = fakeAgentLoop((_prompts, _context, config) => {
+      seenCacheRetention = config.cacheRetention;
+    });
+
+    await runDropper({ ...baseArgs, agentLoop: loop, cacheRetention: "long" });
+
+    expect(seenCacheRetention).toBe("long");
+  });
+
+  it("omits cacheRetention from the agent loop config when unset", async () => {
+    let seenCacheRetention: unknown = "sentinel";
+    const loop = fakeAgentLoop((_prompts, _context, config) => {
+      seenCacheRetention = config.cacheRetention;
+    });
+
+    await runDropper({ ...baseArgs, agentLoop: loop });
+
+    expect(seenCacheRetention).toBeUndefined();
+  });
+
   it("computes observation pool fullness defensively", () => {
     expect(observationPoolFullness(0, 100)).toBe(0);
     expect(observationPoolFullness(-1, 100)).toBe(0);
@@ -102,6 +135,26 @@ describe("V3 dropper agent", () => {
 
     // Budget ≤ 0 → guarded, returns 0
     expect(maxDropCountForPool(observations, 100, 0)).toBe(0);
+  });
+
+  it("returns a finite cap when the skip threshold is 1", () => {
+    const observations = Array.from({ length: 10 }, (_, index) =>
+      observation(`${index}`.padStart(12, "a"), {
+        relevance: "low",
+        tokenCount: 10,
+      }),
+    );
+
+    // The loader accepts (0, 1]: at exactly 1 the ratio span is 0/0 = NaN,
+    // and every downstream `<= 0` guard misses NaN — dropping would silently
+    // stop while still spending a model call per cycle. A full pool is at
+    // target, so it must grant the maximum ratio instead.
+    const capped = maxDropCountForPool(observations, 100, 100, 1);
+    expect(Number.isFinite(capped)).toBe(true);
+    expect(capped).toBe(5);
+
+    // An under-target pool still settles to zero at threshold 1.
+    expect(maxDropCountForPool(observations, 50, 100, 1)).toBe(0);
   });
 
   it("respects critical relevance in droppableCount — critical obs are never counted as droppable", () => {
@@ -160,7 +213,7 @@ describe("V3 dropper agent", () => {
     // pi-blackhole display format: "fullness: ~X%" (no "against target")
     expect(userText).toContain("[coverage: partial]");
     expect(userText).toContain("[coverage: none]");
-    expect(userText).toContain("Maximum drops allowed this run:");
+    expect(userText).toContain("Pool-wide maximum drops:");
     expect(userText).toContain("hard upper bound, not a target");
     expect(userText).toContain("Drop fewer or none");
     // pi-blackhole still uses DropUrgency

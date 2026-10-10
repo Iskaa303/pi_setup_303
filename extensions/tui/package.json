@@ -1,0 +1,18 @@
+{
+  "name": "pi-extension-tui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Drive and test terminal UI programs from pi with agent-tui (run/screenshot/type/press/wait/kill)",
+  "type": "module",
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}

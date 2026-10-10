@@ -5,7 +5,11 @@ All notable changes to `@juicesharp/rpiv-ask-user-question` are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.12.0] - 2026-09-30
+
+### Fixed
+
+- **`typebox` is declared as a `peerDependencies: "*"` entry, no longer a `dependencies` entry.** Pi provides `typebox` to extensions and aliases the bare specifier to its own bundled copy at load time, so the copy this manifest installed was dead weight at best and a second live instance at worst. Pi 0.99.1 warns at every startup about the old shape ("Host-provided extension packages must be declared in peerDependencies with a \"*\" range, not dependencies: typebox"); this clears it once the release is installed. Contributed in #282; reported in #266, #268, #272 and #277.
 
 ## [2.11.0] - 2026-09-21
 

@@ -45,8 +45,18 @@ export type PrepareCompactionLike = (
   settings: CompactionSettingsLike,
 ) => unknown | undefined;
 
+/**
+ * The session model, as far as settings resolution cares about it. Pi resolves
+ * `compaction.modelOverrides["<provider>/<id>"]` by passing the model, so a
+ * probe that omits it answers a different question than the host will ask.
+ */
+export interface ModelLike {
+  provider?: string;
+  id?: string;
+}
+
 interface SettingsManagerLike {
-  getCompactionSettings?(): CompactionSettingsLike;
+  getCompactionSettings?(model?: ModelLike): CompactionSettingsLike;
 }
 
 interface PatchableSession {
@@ -56,6 +66,7 @@ interface PatchableSession {
   abort(): Promise<void>;
   compact(customInstructions?: string): Promise<CompactionResult>;
   _bindExtensionCore(runner: unknown): unknown;
+  _emit?(event: unknown): void;
   _disconnectFromAgent?(): void;
   _reconnectToAgent?(): void;
   _compactionAbortController?: AbortController;
@@ -143,6 +154,9 @@ export interface PrepareCompactionStatus {
   source?: string;
   failure?: string;
 }
+
+/** Which of the host's two manual-compaction refusals a branch would hit. */
+export type CompactionIneligibility = "already_compacted" | "too_small";
 
 export type InlineCompaction = (
   sessionManager: object,
@@ -838,6 +852,41 @@ function hasTrailingUnpairedToolCall(messages: unknown[]): boolean {
 }
 
 /**
+ * Events `AgentSession.compact()` labels "manual" that actually describe the
+ * automatic, in-run compaction Blackhole performs at an awaited turn boundary.
+ *
+ * Pi's public event stream (relayed verbatim by RPC/SDK clients) uses `reason`
+ * to tell a user-initiated `/compact` between runs apart from an automatic
+ * in-run compaction: a "manual" start opens a new turn and a "manual" end
+ * closes processing. An inline attempt runs while the agent loop is still
+ * open, so advertising itself as manual makes a frontend end the turn
+ * mid-run. Pi's `compact()` hardcodes "manual" with no way to override it, so
+ * the adapter rewrites the label for the duration of the attempt. Blackhole's
+ * mid-run path is always the token-threshold trigger (Pi's own overflow path
+ * enters through `_runAutoCompaction`, never this call).
+ */
+const INLINE_COMPACTION_REASON = "threshold" as const;
+
+/**
+ * Return `event` with its `reason` corrected for an inline compaction, or the
+ * same reference when it is not a compaction-lifecycle event. Only "manual"
+ * is rewritten, so a genuine overflow/threshold label is never clobbered.
+ */
+function relabelInlineCompactionReason(event: unknown): unknown {
+  if (!event || typeof event !== "object") return event;
+  const value = event as { type?: unknown; reason?: unknown; source?: unknown };
+  if (value.reason !== "manual") return event;
+  if (
+    value.type === "compaction_start" ||
+    value.type === "compaction_end" ||
+    (value.type === "summarization_retry_attempt_start" && value.source === "compaction")
+  ) {
+    return { ...value, reason: INLINE_COMPACTION_REASON };
+  }
+  return event;
+}
+
+/**
  * Run Pi's native compaction pipeline at an awaited turn_end boundary without
  * aborting the active agent run. This is intentionally private to Blackhole:
  * callers must ensure all tools for the turn have completed.
@@ -920,6 +969,19 @@ export async function compactInlineAtTurnBoundary(
         ),
       );
 
+      const realEmit = session._emit;
+      if (typeof realEmit === "function") {
+        restores.push(
+          shadowProperty(
+            session,
+            "_emit",
+            function inlineEmit(this: PatchableSession, event: unknown): void {
+              realEmit.call(this, relabelInlineCompactionReason(event));
+            },
+          ),
+        );
+      }
+
       result = await originalCompact.call(session, customInstructions);
       // Mark the refresh before validating the quiesce invariant. If a future Pi
       // shape mutates state but does not invoke the expected hook, the error stays
@@ -968,11 +1030,15 @@ export async function compactInlineAtTurnBoundary(
 
 export function getCapturedCompactionSettings(
   sessionManager: object,
+  model?: ModelLike,
 ): CompactionSettingsLike | undefined {
   const registry = getRegistry();
   const record = registry.sessions.get(sessionManager);
   if (record?.session?.settingsManager?.getCompactionSettings) {
-    return record.session.settingsManager.getCompactionSettings();
+    // The host resolves per-model keepRecentTokens/reserveTokens overrides only
+    // when it is handed the model; asking without it silently falls back to the
+    // ordinary setting and can disagree with what compact() will use.
+    return record.session.settingsManager.getCompactionSettings(model);
   }
   return undefined;
 }
@@ -992,11 +1058,25 @@ export function getPrepareCompactionStatus(sessionManager?: object): PrepareComp
   };
 }
 
-export function isCompactionEligible(
+/**
+ * Which of the host's two manual-compaction refusals this branch would hit, or
+ * `null` when it may compact.
+ *
+ * Pi's `compact()` throws a distinct message for each refusal — "Already
+ * compacted" when the branch ends in a compaction entry, "Nothing to compact
+ * (session too small)" when `prepareCompaction` finds nothing to summarize — so
+ * a caller that has to report the refusal needs to tell them apart. Mirrors
+ * `AgentSession.compact()`'s own discrimination rather than re-deriving it.
+ *
+ * Fails open (`null`) in every case where the host's answer is unknown: no
+ * `prepareCompaction`, no captured session, no settings, or a throwing probe.
+ */
+export function getCompactionIneligibility(
   sessionManager: object,
   entries: unknown[],
   customSettings?: CompactionSettingsLike,
-): boolean {
+  model?: ModelLike,
+): CompactionIneligibility | null {
   const registry = getRegistry();
   const record = registry.sessions.get(sessionManager);
   // A host-bound session uses the helper resolved for its own host — never the
@@ -1006,20 +1086,31 @@ export function isCompactionEligible(
     : registry.prepareCompaction;
   if (typeof prepare !== "function") {
     // Unknown host capability: do not permanently disable compaction.
-    return true;
+    return null;
   }
 
   try {
-    const settings = customSettings ?? getCapturedCompactionSettings(sessionManager);
+    const settings = customSettings ?? getCapturedCompactionSettings(sessionManager, model);
     if (!settings) {
       // Session not captured / settings unavailable: unknown host capability, do not block.
-      return true;
+      return null;
     }
 
     const prep = prepare(entries, settings);
-    return prep !== undefined;
+    if (prep !== undefined) return null;
+    const lastEntry = entries[entries.length - 1] as { type?: unknown } | undefined;
+    return lastEntry?.type === "compaction" ? "already_compacted" : "too_small";
   } catch {
     // Fail-open on unexpected error during settings resolution or preparation check so compaction is not blocked.
-    return true;
+    return null;
   }
+}
+
+export function isCompactionEligible(
+  sessionManager: object,
+  entries: unknown[],
+  customSettings?: CompactionSettingsLike,
+  model?: ModelLike,
+): boolean {
+  return getCompactionIneligibility(sessionManager, entries, customSettings, model) === null;
 }

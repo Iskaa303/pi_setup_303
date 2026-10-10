@@ -26,15 +26,21 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { AuthResult } from "@earendil-works/pi-ai";
 import { debugLog } from "./debug-log.js";
 
+interface ResolvedModelBase {
+  ok: true;
+  model: any;
+  apiKey: string;
+  headers?: Record<string, string>;
+  env?: Record<string, string>;
+  cooldownApplied?: boolean;
+}
+
 export type ResolveResult =
-  | {
-      ok: true;
-      model: any;
-      apiKey: string;
-      headers?: Record<string, string>;
-      env?: Record<string, string>;
-      cooldownApplied?: boolean;
-    }
+  | (ResolvedModelBase & {
+      source: "candidate";
+      candidateConfig: ConfiguredModel;
+    })
+  | (ResolvedModelBase & { source: "session" })
   | { ok: false; reason: string };
 
 type NotifyLevel = "warning" | "info" | "error";
@@ -53,6 +59,10 @@ export type CursorState = "initial" | "recorded" | "empty" | "error" | "skipped"
 export interface PipelineCursor {
   entryId: string;
   state: CursorState;
+  /** Signature (sorted observation-id list) of the pool an empty pressure run
+   *  evaluated — dropper only, and only on `"empty"` cursors. It suppresses
+   *  repeat pressure runs until the pool changes; see `consolidation.ts`. */
+  activePoolSignature?: string;
 }
 
 export interface PipelineCursors {
@@ -151,6 +161,14 @@ export class Runtime {
    * Cleared between stages at the pipeline level.
    */
   failedInCycle: Set<string> = new Set();
+  /**
+   * Models skipped in the current consolidation stage because the sized input
+   * does not fit their context window (in-memory only). A too-small window is
+   * not a broken model, so — unlike recordRetryableError — this never writes
+   * a persisted cooldown: the model stays available for smaller inputs and
+   * for the shrink-to-fit pass. Cleared between stages alongside failedInCycle.
+   */
+  sizeSkippedInCycle: Set<string> = new Set();
   compactInFlight = false;
   compactHookInFlight = false;
   /** AbortController for the pending auto-compaction wait loop, or null if none.
@@ -325,6 +343,20 @@ export class Runtime {
     this.hasEmittedInfoThisTurn = false;
   }
 
+  /**
+   * Emit a routine observer/reflector/dropper progress toast, unless the user
+   * turned worker notifications off (`showWorkerNotifications: false`).
+   *
+   * Only routine progress goes through here — model fallback/unavailability,
+   * no-output warnings, worker failures and compaction notices keep using
+   * `tryEmitInfo` / `ui.notify` directly so they stay visible when the knob is
+   * off.
+   */
+  tryEmitWorkerInfo(hasUI: boolean, ui: { notify: Notify } | undefined, message: string): boolean {
+    if (this.config.showWorkerNotifications === false) return false;
+    return this.tryEmitInfo(hasUI, ui, message);
+  }
+
   ensureConfig(cwd: string, warn?: (message: string) => void): void {
     if (this.configLoaded) return;
     this.config = loadConfig(cwd, warn);
@@ -385,6 +417,7 @@ export class Runtime {
 
     // Try configured candidates
     for (const candidate of candidates) {
+      signal?.throwIfAborted();
       const key = modelKey(candidate);
 
       // In-memory skip: model failed earlier in this stage with cooldownHours 0
@@ -395,6 +428,18 @@ export class Runtime {
           `Observational memory: ${stageName} skipping ${key} (failed this cycle, cooldown disabled)`,
         );
         debugLog("model.failed_this_cycle", { stage: stageName, model: key });
+        continue;
+      }
+
+      // In-memory skip: the sized input does not fit this model's window. No
+      // persisted cooldown — the model is tried again for smaller inputs.
+      if (this.sizeSkippedInCycle.has(key)) {
+        this.tryEmitInfo(
+          ctx.hasUI,
+          ctx.ui,
+          `Observational memory: ${stageName} skipping ${key} (context window too small for this input)`,
+        );
+        debugLog("model.size_skipped_this_cycle", { stage: stageName, model: key });
         continue;
       }
 
@@ -456,6 +501,8 @@ export class Runtime {
 
       return {
         ok: true,
+        source: "candidate",
+        candidateConfig: candidate,
         model: resolvedModel,
         apiKey: (auth.apiKey as string) ?? "",
         headers: auth.headers as Record<string, string> | undefined,
@@ -493,6 +540,39 @@ export class Runtime {
         };
       }
 
+      // In-memory per-cycle failures also apply to the session fallback: when
+      // the session model shares provider/id with a candidate that already
+      // failed this cycle (cooldownHours: 0), it IS the same model. Returning
+      // it would re-run an identical stalled model, and findCandidateConfig
+      // would match the configured entry — defeating the stage-level break.
+      if (
+        typeof sessionIdentity.provider === "string" &&
+        typeof sessionIdentity.id === "string" &&
+        this.failedInCycle.has(
+          modelKey({ provider: sessionIdentity.provider, id: sessionIdentity.id }),
+        )
+      ) {
+        return {
+          ok: false,
+          reason: `no model available for ${stageName} (all candidates exhausted, session model ${sessionIdentity.provider}/${sessionIdentity.id} failed this cycle)`,
+        };
+      }
+
+      // Same for a size-skipped session model: the sized input did not fit it
+      // earlier in this stage run.
+      if (
+        typeof sessionIdentity.provider === "string" &&
+        typeof sessionIdentity.id === "string" &&
+        this.sizeSkippedInCycle.has(
+          modelKey({ provider: sessionIdentity.provider, id: sessionIdentity.id }),
+        )
+      ) {
+        return {
+          ok: false,
+          reason: `no model available for ${stageName} (all candidates exhausted, session model ${sessionIdentity.provider}/${sessionIdentity.id} too small for this input)`,
+        };
+      }
+
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(sessionModel);
       signal?.throwIfAborted();
       let hasAuth = ctx.modelRegistry.hasConfiguredAuth?.(sessionModel) ?? true;
@@ -522,6 +602,7 @@ export class Runtime {
 
       return {
         ok: true,
+        source: "session",
         model: resolvedModel,
         apiKey: (auth.apiKey as string) ?? "",
         headers: auth.headers as Record<string, string> | undefined,
@@ -606,20 +687,25 @@ export class Runtime {
   }
 
   /**
-   * Get the model config for the currently resolved model (used for cooldown recording).
-   * Returns the candidate config if the model was from the candidate list,
-   * or undefined if it's the session model.
+   * Mark a model as too small for the current sized input for the rest of this
+   * stage run. In-memory only, never a persisted cooldown: the window, not the
+   * model, is at fault, so it stays available for smaller inputs and for the
+   * shrink-to-fit pass (which re-offers it via unskipOversizedForCycle).
+   * Accepts a candidate config or a resolved model identity; undefined (e.g. an
+   * unresolvable session model) is a no-op.
    */
-  findCandidateConfig(resolvedModel: unknown, ctx: ResolveCtx): ConfiguredModel | undefined {
-    const candidates = this.buildCandidateList(ctx.stageModel, ctx.stageFallbacks);
-    const model = resolvedModel as { provider?: string; id?: string };
-    if (!model.provider || !model.id) return undefined;
-    return (
-      candidates.find((c) => c.provider === model.provider && c.id === model.id) ??
-      (this.config.model?.provider === model.provider && this.config.model?.id === model.id
-        ? this.config.model
-        : undefined)
-    );
+  skipOversizedForCycle(model: { provider: string; id: string } | undefined): void {
+    if (!model || typeof model.provider !== "string" || typeof model.id !== "string") return;
+    this.sizeSkippedInCycle.add(modelKey(model));
+  }
+
+  /**
+   * Re-offer a size-skipped model. The shrink-to-fit pass calls this for the
+   * largest-window model before re-resolving: the shrunk input fits it now.
+   */
+  unskipOversizedForCycle(model: { provider: string; id: string } | undefined): void {
+    if (!model || typeof model.provider !== "string" || typeof model.id !== "string") return;
+    this.sizeSkippedInCycle.delete(modelKey(model));
   }
 
   /**
@@ -699,8 +785,15 @@ export class Runtime {
   }
 
   /** Advance a stage's cursor to a new entry ID with the given state. */
-  advanceCursor(stage: ConsolidationPhase, entryId: string, state: CursorState): void {
-    this.cursors[stage] = { entryId, state };
+  advanceCursor(
+    stage: ConsolidationPhase,
+    entryId: string,
+    state: CursorState,
+    activePoolSignature?: string,
+  ): void {
+    const cursor: PipelineCursor = { entryId, state };
+    if (activePoolSignature) cursor.activePoolSignature = activePoolSignature;
+    this.cursors[stage] = cursor;
   }
 
   /** Load cursors from the per‑session pending file into the in‑memory map. */
@@ -721,9 +814,13 @@ export class Runtime {
         };
       }
       if (stored.dropper?.entryId && stored.dropper?.state) {
+        const activePoolSignature = stored.dropper.activePoolSignature;
         this.cursors.dropper = {
           entryId: stored.dropper.entryId,
           state: stored.dropper.state as CursorState,
+          ...(typeof activePoolSignature === "string" && activePoolSignature
+            ? { activePoolSignature }
+            : {}),
         };
       }
     } catch {

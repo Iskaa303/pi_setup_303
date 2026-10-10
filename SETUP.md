@@ -43,6 +43,7 @@ hm = {
 | `programs.pi-setup.extensions` | every extension package | written into `settings.json` as `packages` |
 | `programs.pi-setup.settings` | `{}` | the rest of `settings.json` |
 | `programs.pi-setup.ketch` | `pkgs.ketch` | added to `home.packages`, `KETCH_BIN` set |
+| `programs.pi-setup.agentTui` | this flake's `agent-tui` | added to `home.packages`, `AGENT_TUI_BIN` set |
 | `programs.pi-setup.camoufox` | `false` | `CAMOUFOX_JS` points at the nix-built client |
 | `programs.pi-setup.videoTools` | `true` | ffmpeg + yt-dlp on PATH for transcripts and frames |
 
@@ -61,10 +62,11 @@ hm = {
 Every extension is a nix package with its npm dependencies baked in:
 
 ```sh
-nix build .#ketch-web-access        # or .#ponytail, .#pi-subagents, ...
+nix build .#ketch-web-access        # or .#ponytail, .#pi-subagents, .#tui, ...
 nix build .#pi-setup                # all of them joined
+nix build .#agent-tui               # the TUI driver the tui extension shells out to
 nix build .#camoufox-js            # optional real-Firefox engine client
-nix flake check                     # runs ketch-web-access's unit tests
+nix flake check                     # runs every extension's unit tests
 ```
 
 ## Development
@@ -74,8 +76,8 @@ from `flake.nix`, so the dev environment and your NixOS config install the same
 builds.
 
 ```sh
-devenv shell                       # ketch, ffmpeg, yt-dlp, gh, camoufox libraries
-devenv test                        # ketch-web-access unit tests
+devenv shell                       # ketch, agent-tui, ffmpeg, yt-dlp, gh, camoufox libraries
+devenv test                        # extension unit tests
 devenv package                     # build the extension from this checkout
 devenv run link-pi-extension       # copy it into ~/.pi/agent/extensions
 ```
@@ -86,6 +88,7 @@ depends on it.
 | Package | Runtime deps it ships |
 |---|---|
 | `ketch-web-access` | none (peer deps come from pi itself) |
+| `tui` | none; drives the `agent-tui` binary instead of npm |
 | `ponytail` | none |
 | `pi-subagents` | acorn, jiti, undici, yaml |
 | `pi-blackhole` | built with tsup during the build (`dist/` is not in the repo) |
@@ -203,6 +206,7 @@ cp /tmp/x/package-lock.json nix/locks/pi-subagents.json
 | Tool | Needed for | Where it comes from |
 |---|---|---|
 | `ketch` | all web access | `packages.ketch`, put in `home.packages` |
+| `agent-tui` | the `tui` extension (REPLs, debuggers, TUI apps) | `packages.agent-tui`, put in `home.packages` |
 | `camoufox-js` | `fetch_content {engine: "camoufox"}` | `packages.camoufox-js` + `npx camoufox-js fetch` once |
 | `ffmpeg`, `yt-dlp` | video transcripts and frames | `devenv shell`, or add to your config |
 | `gh` or `git` | cloning GitHub repos | any |
@@ -214,6 +218,10 @@ also needs the Firefox shared libraries, which the module puts on
 
 `ketch` is `pkgs.ketch` from nixpkgs (your own overlay shadows it if you
 build it); override with `programs.pi-setup.ketch` to pin something else.
+
+`agent-tui` is built here (`packages.agent-tui`) from upstream's prebuilt
+release binary; override with `programs.pi-setup.agentTui` to pin something
+else.
 
 ## Bumping pi
 

@@ -18,6 +18,8 @@ import { resolveWorkflowForegroundSteeringTarget, steerWorkflowForegroundTarget 
 import { contextModeBadge, contextModeLabel } from "../runs/shared/context-mode.ts";
 import { FLEET_STATUS_WIDGET_KEY } from "./fleet-status.ts";
 import { readFleetTranscript, renderFleetTranscript, type FleetTranscript } from "./fleet-transcript.ts";
+import { runningTone } from "./running-tone.ts";
+import { childThinkingLevel, type ThinkingLevel } from "../shared/model-info.ts";
 import { handleInspectorAction } from "../inspectors/actions.ts";
 import type { InspectorPlugin } from "../inspectors/types.ts";
 import { getLivePromptAudit, type LivePromptAudit, type PromptAuditView } from "../runs/foreground/prompt-audit.ts";
@@ -110,7 +112,7 @@ export interface FleetViewOptions {
 	fleetKeybindings?: FleetKeybindingsConfig;
 	actions?: FleetActionHandlers;
 	copyText?: (text: string) => Promise<void> | void;
-	inspectorPlugins?: readonly InspectorPlugin[];
+	inspectorPlugins?: () => readonly InspectorPlugin[];
 	inspectorEnv?: NodeJS.ProcessEnv;
 }
 
@@ -348,8 +350,18 @@ function visibleWorkflowParentKeyForForegroundKey(state: SubagentState, key: str
 	return undefined;
 }
 
+/** The recorded level of the one child a running Fleet row stands for; a whole run or an external run has none. */
+function fleetItemThinkingLevel(item: FleetItem): ThinkingLevel | undefined {
+	switch (item.kind) {
+		case "foreground-active": return childThinkingLevel(item.activeChild ?? item.control);
+		case "foreground-recent": return childThinkingLevel(item.child);
+		case "async": return childThinkingLevel(item.step);
+		case "external": return undefined;
+	}
+}
+
 function statusGlyph(item: FleetItem, theme: Theme): string {
-	if (item.state === "running") return theme.fg("accent", "●");
+	if (item.state === "running") return runningTone(theme, fleetItemThinkingLevel(item))("●");
 	if (item.state === "queued" || item.state === "pending") return theme.fg("muted", "◦");
 	if (item.state === "complete" || item.state === "completed") return theme.fg("success", "✓");
 	if (item.state === "paused" || item.state === "stopped" || item.state === "detached") return theme.fg("warning", "■");
@@ -784,8 +796,10 @@ interface FleetTranscriptCache {
 
 function transcriptFingerprint(filePath: string): string {
 	try {
-		const stat = fs.statSync(filePath);
-		return `${stat.size}:${stat.mtimeMs}`;
+		// ino and ctime catch a same-size, same-mtime replacement. Bigint keeps
+		// Windows file ids, which exceed 2^53, exact.
+		const stat = fs.statSync(filePath, { bigint: true });
+		return `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 	} catch {
 		return "missing";
 	}
@@ -847,7 +861,7 @@ export class SubagentFleetComponent implements Component {
 			this.refreshTimer = undefined;
 			if (this.disposed) return;
 			try {
-				this.invalidate();
+				this.refresh();
 				this.tui.requestRender();
 			} finally {
 				this.scheduleRefresh();
@@ -1249,7 +1263,10 @@ export class SubagentFleetComponent implements Component {
 		const body = transcript.events.length > 0
 			? renderFleetTranscript(transcript, width, this.theme, this.markdownTheme, { expandedTools: this.expandedTools })
 			: [];
-		this.transcriptCache = { path: target.path, fingerprint, width, expandedTools: this.expandedTools, transcript, body };
+		// A failed read (refused path, read error) may recover without a metadata change, so retry it.
+		this.transcriptCache = transcript.readFailed
+			? undefined
+			: { path: target.path, fingerprint, width, expandedTools: this.expandedTools, transcript, body };
 		return { transcript, body: [...body] };
 	}
 
@@ -1428,7 +1445,7 @@ export async function openSubagentFleet(ctx: ExtensionContext, state: SubagentSt
 			cwd: state.baseCwd,
 			...(state.authorityPolicy ? { authorityPolicy: state.authorityPolicy } : {}),
 			...(state.missionStoreConfig ? { missions: state.missionStoreConfig } : {}),
-			...(options.inspectorPlugins ? { plugins: options.inspectorPlugins } : {}),
+			plugins: options.inspectorPlugins?.(),
 			...(options.inspectorEnv ? { env: options.inspectorEnv } : {}),
 		}), `Failed to open inspector for async run ${input.runId}.`),
 		redoPrompt: async (input: { runId: string; index: number; guidance: string; control?: ForegroundRunControl }) => {

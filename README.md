@@ -46,7 +46,7 @@ devenv shell                   # dev environment
 ## pi version
 
 Pinned in `flake.nix` (`piVersion` / `piAssets`) to upstream's prebuilt release
-tarball, currently **0.99.1**. Updating your lock cannot move it; bumping is a
+tarball, currently **1.1.0**. Updating your lock cannot move it; bumping is a
 deliberate edit of those two attributes plus `nix build .#pi --refresh`.
 
 ## Currently vendored
@@ -62,7 +62,7 @@ deliberate edit of those two attributes plus `nix build .#pi --refresh`.
 | [@narumitw/pi-statusline](https://pi.dev/packages/@narumitw/pi-statusline) | the status line | MIT |
 | [@ff-labs/pi-fff](https://pi.dev/packages/@ff-labs/pi-fff) | fuzzy file and content search (`fffind`) | MIT |
 
-Not vendored, written here, three extensions of my own:
+Not vendored, written here, four extensions of my own:
 
 - [`extensions/ketch-web-access`](./extensions/ketch-web-access)
 replaces pi-web-access with Ketch as the only web provider, registering the
@@ -82,6 +82,12 @@ README and `licenses/`.
   desktop notification when a question is waiting for you or a subagent blocks
   on you. The chime is synthesised by ffmpeg at build time, so no audio is
   vendored.
+- [`extensions/tui`](./extensions/tui) — drive and test programs that expect a
+  human at the keyboard (REPLs, debuggers, pagers, editors, full-screen TUI
+  apps) with [agent-tui](https://github.com/pproenca/agent-tui), a Rust CLI that
+  runs the program in a virtual terminal. This flake packages agent-tui's
+  prebuilt binary; the extension exposes `tui_run`, `tui_screenshot`,
+  `tui_type`, `tui_press`, `tui_wait`, `tui_kill`, and `tui_sessions`.
 
 See [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md) for versions, commits,
 and upstream links, [licenses/](./licenses) for every license text, and

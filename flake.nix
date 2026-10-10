@@ -21,23 +21,23 @@
 
       # pi, pinned. Upstream publishes one prebuilt tarball per system; these
       # hashes are from those releases and never move on their own.
-      piVersion = "0.99.1";
+      piVersion = "1.1.0";
       piAssets = {
         "x86_64-linux" = {
           platform = "linux-x64";
-          hash = "sha256-yBuaNnuymF+kWiwNTxKxR6zENlVoORClq/k3/iIghCU=";
+          hash = "sha256-P6qUZmzThJ03rzIP90lAfQJxsHqblPQgyH4whm4Q4ok=";
         };
         "aarch64-linux" = {
           platform = "linux-arm64";
-          hash = "sha256-5jKp5VvIZSX/0PcdCRhdYwiD9kuc/IWPcx0e3JJxaVQ=";
+          hash = "sha256-87DKxFn531Qg5OSLSOldgb+rV7cB3T/ksI/afRHSfas=";
         };
         "x86_64-darwin" = {
           platform = "darwin-x64";
-          hash = "sha256-mtb8NW9NCLnRDopvkprBukkI3VM1RLqYnFTHO5K1PhM=";
+          hash = "sha256-j92RSa4n50cKahDtinwO2Ac41VreyAqNd2T2OG0eZYs=";
         };
         "aarch64-darwin" = {
           platform = "darwin-arm64";
-          hash = "sha256-RpKrodzUghm2HttOzrw8M/YZnr5lKZIo/OW6acMaI6Y=";
+          hash = "sha256-NFWxPeNcFaWJPN68kiZ4GZ6Qp86ZsGy8I/N4YOkNY8c=";
         };
       };
 
@@ -151,28 +151,28 @@
         };
         pi-subagents = {
           src = ./vendor/pi-subagents;
-          version = "0.71.0";
+          version = "0.77.0";
           lock = ./nix/locks/pi-subagents.json;
-          depsHash = "sha256-RNE8Uo8Sd6RR/qc1Te33msrPgT0lvAeBr0AAk5Xy8sM=";
+          depsHash = "sha256-u++wEfUDv9SWy6aLojT9JBYx9ZZreNeJWkMXohlcfh8=";
         };
         pi-blackhole = {
           src = ./vendor/pi-blackhole;
-          version = "0.5.8";
+          version = "0.5.12";
           lock = ./nix/locks/pi-blackhole.json;
-          depsHash = "sha256-BHo2xEz2KI5QeyOwlMOv+hdOT0ROsc37rpunyl1rBWw=";
+          depsHash = "sha256-TxQY6fKcoxZjYPgtdlWubAuppy2PiI6cuEFWqS8Z9HA=";
           build = "build";
         };
         rpiv-ask-user-question = {
           src = ./vendor/rpiv-mono/packages/rpiv-ask-user-question;
-          version = "2.11.0";
+          version = "2.12.0";
           lock = ./nix/locks/rpiv-ask-user-question.json;
-          depsHash = "sha256-2xRdNztujs12bzWCUF9oP5u5MzwxcPjXDXVg51CCfvI=";
+          depsHash = "sha256-OgWE/UyUczwYEK/IXXGfJw3Iem9KYKS3Qutwhleg1gw=";
         };
         rpiv-todo = {
           src = ./vendor/rpiv-mono/packages/rpiv-todo;
-          version = "2.11.0";
+          version = "2.12.0";
           lock = ./nix/locks/rpiv-todo.json;
-          depsHash = "sha256-UCKRcw0hQKSqYK65RF64KladGVC7gmXwQfRbK4qofu8=";
+          depsHash = "sha256-f/krzjMcYapfqhRqAWfcLXij7RicX6pn9r+64qvAuNw=";
         };
         pi-notify = {
           src = ./vendor/pi-notify;
@@ -196,6 +196,10 @@
           src = ./extensions/attention-notify;
           version = "0.1.0";
         };
+        tui = {
+          src = ./extensions/tui;
+          version = "0.1.0";
+        };
         pi-fff = {
           src = ./vendor/pi-fff;
           version = "0.11.0";
@@ -211,7 +215,7 @@
         let
           deps = pkgs.buildNpmPackage {
             pname = "camoufox-js-deps";
-            version = "0.12.0";
+            version = "0.12.1";
             src = ./nix/camoufox-js;
             dontNpmBuild = true;
             postPatch = ''
@@ -219,14 +223,72 @@
             '';
             npmDepsFetcherVersion = 2;
             dontFixup = true;
-            npmDepsHash = "sha256-1s3lp3rGx8TSt1xbiMsreYJMJrCJ8XGNGZOhgCno3C4=";
+            npmDepsHash = "sha256-kjtXV48HJLdXWCU/t3FIXnHuBRqdUHKPSbXlbvJpc7A=";
           };
         in
-        pkgs.runCommand "camoufox-js-0.12.0" { } ''
+        pkgs.runCommand "camoufox-js-0.12.1" { } ''
           mkdir -p $out/lib/node_modules
           cp -a ${deps}/lib/node_modules/. $out/lib/node_modules/
           chmod -R u+w $out
         '';
+
+      # agent-tui: the virtual-terminal driver behind the `tui` extension.
+      # Upstream publishes one prebuilt binary per platform, so this is a
+      # download plus autoPatchelfHook (the Linux binary links glibc and
+      # libgcc_s by absolute path) — no Rust toolchain, no build.
+      mkAgentTui = pkgs:
+        let
+          version = "1.1.0";
+          assets = {
+            "x86_64-linux" = {
+              asset = "agent-tui-linux-x64";
+              hash = "sha256-N6F6n85weixvx6cwuHGZLdM4JDYtjQSwKxzyBlj8iJg=";
+            };
+            "aarch64-linux" = {
+              asset = "agent-tui-linux-arm64";
+              hash = "sha256-/8pvUOAw3KWS+qCCKf1L16G4lelcz7MEMuikVBKZ4ys=";
+            };
+            "x86_64-darwin" = {
+              asset = "agent-tui-darwin-x64";
+              hash = "sha256-gcBxr7TfPGiAWevmM29UPP5eeQghR9NXEnTCUI6nmMs=";
+            };
+            "aarch64-darwin" = {
+              asset = "agent-tui-darwin-arm64";
+              hash = "sha256-Da7UlaLZCsznpyDNXvlMdhPFSxJ3v/x0ZrmY8+3wI7U=";
+            };
+          };
+          asset =
+            assets.${pkgs.stdenv.hostPlatform.system}
+              or (throw "agent-tui ${version} has no binary for ${pkgs.stdenv.hostPlatform.system}");
+        in
+        pkgs.stdenv.mkDerivation {
+          pname = "agent-tui";
+          inherit version;
+          src = pkgs.fetchurl {
+            url = "https://github.com/pproenca/agent-tui/releases/download/v${version}/${asset.asset}";
+            hash = asset.hash;
+          };
+          dontUnpack = true;
+          dontConfigure = true;
+          dontBuild = true;
+          nativeBuildInputs = lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.autoPatchelfHook ];
+          buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.stdenv.cc.cc.lib ];
+          installPhase = ''
+            install -Dm755 $src $out/bin/agent-tui
+          '';
+          meta = {
+            description = "TUI automation for AI agents: control any terminal app from code";
+            homepage = "https://github.com/pproenca/agent-tui";
+            license = lib.licenses.mit;
+            mainProgram = "agent-tui";
+            platforms = [
+              "x86_64-linux"
+              "aarch64-linux"
+              "x86_64-darwin"
+              "aarch64-darwin"
+            ];
+          };
+        };
 
       extensionNames = builtins.attrNames extensionSpecs;
       mkExtensionPkgs = pkgs: lib.mapAttrs (name: spec: mkPiExtension pkgs (spec // { inherit name; })) extensionSpecs;
@@ -278,6 +340,7 @@
         let
           ketch = pkgs.ketch;
           camoufox-js = mkCamoufoxJs pkgs;
+          agent-tui = mkAgentTui pkgs;
           extensions = mkExtensionPkgs pkgs;
           attentionSound = import ./nix/attention-sound.nix { inherit pkgs; };
 
@@ -287,7 +350,7 @@
           };
         in
         rec {
-          inherit ketch camoufox-js pi attentionSound;
+          inherit ketch camoufox-js agent-tui pi attentionSound;
 
           # All extensions in one output, for inspection or `pi install`.
           pi-setup = pkgs.symlinkJoin {
@@ -427,6 +490,13 @@
               description = "The ketch CLI that ketch-web-access shells out to.";
             };
 
+            agentTui = lib.mkOption {
+              type = lib.types.package;
+              default = own.agent-tui;
+              defaultText = lib.literalExpression "this flake's agent-tui package";
+              description = "The agent-tui binary the tui extension shells out to.";
+            };
+
             videoTools = lib.mkOption {
               type = lib.types.bool;
               default = true;
@@ -454,7 +524,7 @@
             # libnotify gives notify-send: pi-notify and attention-notify both
             # shell out to it for desktop notifications, and NixOS ships no
             # notifier by default, so without this nothing is ever notified.
-            home.packages = [ cfg.ketch pkgs.libnotify ] ++ lib.optionals cfg.videoTools [ pkgs.ffmpeg pkgs.yt-dlp ];
+            home.packages = [ cfg.ketch pkgs.libnotify cfg.agentTui ] ++ lib.optionals cfg.videoTools [ pkgs.ffmpeg pkgs.yt-dlp ];
 
             # ~/.pi/agent/extensions/<name> -> /nix/store/... so pi finds each
             # extension by its real name instead of a store hash.
@@ -482,6 +552,8 @@
               };
               extraEnv = {
                 KETCH_BIN = "${cfg.ketch}/bin/ketch";
+                # the tui extension drives its own binary rather than PATH lookup
+                AGENT_TUI_BIN = "${cfg.agentTui}/bin/agent-tui";
                 # attention-notify plays this generated chime instead of a system sound.
                 PI_ATTENTION_SOUND = "${own.attentionSound}";
               }
@@ -502,11 +574,11 @@
       checks = forAllSystems (
         pkgs:
         let
-          runTests = name: pkgs.runCommand "pi-${name}-tests" { nativeBuildInputs = [ pkgs.nodejs ]; } ''
+          runTests = name: pkgs.runCommand "pi-${name}-tests" { nativeBuildInputs = [ pkgs.nodejs pkgs.curl ]; } ''
             cp -r ${./extensions/${name}} src
             chmod -R u+w src
             cd src
-            node --experimental-strip-types --test test/*.test.ts
+            node --experimental-strip-types --test --test-force-exit test/*.test.ts
             touch $out
           '';
         in
@@ -515,6 +587,7 @@
           ketch-web-access = runTests "ketch-web-access";
           decider = runTests "decider";
           attention-notify = runTests "attention-notify";
+          tui = runTests "tui";
         }
       );
 
@@ -536,6 +609,7 @@
               pkgs.gh
               pkgs.cacert
               own.ketch
+              own.agent-tui
               own.ketch-web-access
             ];
             LD_LIBRARY_PATH = lib.makeLibraryPath (camoufoxLibs pkgs);

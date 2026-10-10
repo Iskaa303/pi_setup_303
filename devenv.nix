@@ -25,11 +25,13 @@ in
     pkgs.gh
     pkgs.cacert
     own.ketch
+    own.agent-tui
     own.camoufox-js
   ];
 
   env = {
     KETCH_BIN = "${own.ketch}/bin/ketch";
+    AGENT_TUI_BIN = "${own.agent-tui}/bin/agent-tui";
     CAMOUFOX_JS = "${own.camoufox-js}/lib/node_modules/camoufox-js-nix/node_modules";
     # NixOS has none of the Firefox shared libraries on any default path, and
     # camoufox-bin needs them.

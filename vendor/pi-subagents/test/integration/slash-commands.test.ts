@@ -152,6 +152,7 @@ async function withIsolatedHome<T>(fn: () => Promise<T>): Promise<T> {
 function createCommandContext(
 	overrides: Partial<{
 		cwd: string;
+		mode: "tui" | "rpc" | "print";
 		hasUI: boolean;
 		custom: (...args: unknown[]) => Promise<unknown>;
 		notify: (message: string, type?: string) => void;
@@ -173,6 +174,7 @@ function createCommandContext(
 ) {
 	return {
 		cwd: overrides.cwd ?? process.cwd(),
+		mode: overrides.mode ?? (overrides.hasUI ? "tui" : "print"),
 		hasUI: overrides.hasUI ?? false,
 		ui: {
 			notify: overrides.notify ?? ((_message: string) => {}),
@@ -211,7 +213,6 @@ function writeProjectChain(root: string, fileName: string, content: string): voi
 
 function createWatchdogHarness(review?: WatchdogReviewFunction) {
 	const commands = new Map<string, RegisteredSlashCommand>();
-	const renderers = new Map<string, (message: { content: string; details?: unknown }, options: { expanded: boolean }, theme: { fg(name: string, value: string): string; bold(value: string): string }) => { render(width: number): string[] } | undefined>();
 	const sent: unknown[] = [];
 	const entries: Array<{ customType: string; data: unknown }> = [];
 	const pi = {
@@ -219,16 +220,14 @@ function createWatchdogHarness(review?: WatchdogReviewFunction) {
 		on() {},
 		registerCommand(name: string, spec: RegisteredSlashCommand) { commands.set(name, spec); },
 		registerShortcut() {},
-		registerMessageRenderer(type: string, renderer: (message: { content: string; details?: unknown }, options: { expanded: boolean }, theme: { fg(name: string, value: string): string; bold(value: string): string }) => { render(width: number): string[] } | undefined) {
-			renderers.set(type, renderer);
-		},
+		registerMessageRenderer() {},
 		registerEntryRenderer() {},
 		appendEntry(customType: string, data: unknown) { entries.push({ customType, data }); },
 		getThinkingLevel() { return "medium" as const; },
 		sendMessage(message: unknown) { sent.push(message); },
 	};
 	const runtime = registerMainWatchdog!(pi as never, review ? { review } : undefined);
-	return { commands, renderers, runtime, sent, entries };
+	return { commands, runtime, sent, entries };
 }
 
 async function captureSlashCommandParams(
@@ -236,6 +235,7 @@ async function captureSlashCommandParams(
 	args: string,
 	cwd: string,
 	setup?: (pi: RuntimeSlashPi) => void,
+	ctxOverrides: Parameters<typeof createCommandContext>[0] = {},
 ): Promise<{ params: unknown; notifications: string[] }> {
 	return withIsolatedHome(async () => {
 		const commands = new Map<string, RegisteredSlashCommand>();
@@ -275,6 +275,7 @@ async function captureSlashCommandParams(
 				notify: (message) => {
 					notifications.push(message);
 				},
+				...ctxOverrides,
 			}));
 			return { params: requestedParams, notifications };
 		} finally {
@@ -469,7 +470,7 @@ describe("subagents watchdog slash command", { skip: !available ? "watchdog comm
 
 	it("routes explicit low and medium test findings to entries and high findings to messages", async () => {
 		await withIsolatedHome(async () => {
-			const { commands, renderers, sent, entries } = createWatchdogHarness();
+			const { commands, sent, entries } = createWatchdogHarness();
 			await commands.get("subagents-watchdog")!.handler("test concern low check the concern", createCommandContext());
 			await commands.get("subagents-watchdog")!.handler("test concern medium check the medium concern", createCommandContext());
 			await commands.get("subagents-watchdog")!.handler("test blocker high check the blocker", createCommandContext());
@@ -481,11 +482,8 @@ describe("subagents watchdog slash command", { skip: !available ? "watchdog comm
 			assert.equal(blocker.details?.severity, "blocker");
 			assert.equal(blocker.details?.importance, "high");
 			assert.match(blocker.content ?? "", /<blocker_guidance>/);
-
-			const renderer = renderers.get("subagent_watchdog_warning")!;
-			const rendered = renderer(blocker as never, { expanded: true }, { fg: (_name, value) => value, bold: (value) => value })!.render(100).join("\n");
-			assert.match(rendered, /Subagent watchdog Blocker \(displayed\): check the blocker/);
-			assert.match(rendered, /Manual \/subagents-watchdog test blocker message/);
+			assert.match(blocker.content ?? "", /<summary>check the blocker<\/summary>/);
+			assert.match(blocker.content ?? "", /Manual \/subagents-watchdog test blocker message/);
 		});
 	});
 
@@ -591,7 +589,7 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 			const branch = [
 				{ type: "message", message: { role: "assistant", usage: { input: 10, output: 2, cacheRead: 30, cacheWrite: 0, cost: { total: 0.2 } } } },
 				{ type: "compaction", usage: { input: 5, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.05 } } },
-				{ type: "message", message: { role: "toolResult", toolName: "subagent", details: { mode: "workflow", runId: workflowRunId, results: [] } } },
+				{ type: "message", message: { role: "toolResult", toolName: "subagent", details: { mode: "workflow", runId: workflowRunId, asyncId: workflowRunId, results: [] } } },
 			];
 			try {
 				registerSlashCommands!(pi as never, createState(root));
@@ -613,6 +611,77 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 				assert.doesNotMatch(report, /No subagent child usage/);
 			} finally {
 				fs.rmSync(asyncDir, { recursive: true, force: true });
+			}
+		});
+	});
+
+	it("/subagent-cost recovers async single and chain usage from status steps and metadata", async () => {
+		await withTempProject("pi-subagent-cost-async-single-", async (root) => {
+			const singleRunId = `single-cost-${process.pid}-${Date.now()}`;
+			const chainRunId = `chain-cost-${process.pid}-${Date.now()}`;
+			const sessionFile = path.join(root, "sessions", "parent.jsonl");
+			const artifactsDir = getArtifactsDir(sessionFile, root, "session");
+			fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			fs.mkdirSync(artifactsDir, { recursive: true });
+			const runningRunId = `running-cost-${process.pid}-${Date.now()}`;
+			const writeRun = (runId: string, agents: string[], stepStatus = "complete") => {
+				fs.mkdirSync(path.join(DIRS.async, runId), { recursive: true });
+				fs.writeFileSync(path.join(DIRS.async, runId, "status.json"), JSON.stringify({
+					runId, mode: agents.length > 1 ? "chain" : "single", state: stepStatus === "complete" ? "complete" : "running", startedAt: Date.now(), cwd: root,
+					steps: agents.map((agent) => ({ agent, status: stepStatus })),
+				}), "utf-8");
+			};
+			const writeMetadata = (runId: string, agent: string, index: number | undefined, usage: Record<string, number>) => {
+				fs.writeFileSync(getArtifactPaths(artifactsDir, runId, agent, index).metadataPath, JSON.stringify({ runId, agent, usage }), "utf-8");
+			};
+			writeRun(singleRunId, ["oracle"]);
+			writeMetadata(singleRunId, "oracle", undefined, { input: 30, output: 6, cacheRead: 0, cacheWrite: 0, cost: 0.3, turns: 2 });
+			writeRun(chainRunId, ["scout", "worker"]);
+			writeMetadata(chainRunId, "scout", 0, { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.1, turns: 1 });
+			writeMetadata(chainRunId, "worker", 1, { input: 40, output: 8, cacheRead: 0, cacheWrite: 0, cost: 0.4, turns: 3 });
+			// A still-running child has no metadata yet and is not "unavailable".
+			writeRun(runningRunId, ["reviewer"], "running");
+
+			const sent: unknown[] = [];
+			const commands = new Map<string, RegisteredSlashCommand>();
+			const pi = {
+				events: createEventBus(),
+				registerCommand(name: string, spec: RegisteredSlashCommand) { commands.set(name, spec); },
+				registerShortcut() {},
+				sendMessage(message: unknown) { sent.push(message); },
+			};
+			const branch = [
+				{ type: "message", message: { role: "toolResult", toolName: "subagent", details: { mode: "single", runId: singleRunId, asyncId: singleRunId, results: [] } } },
+				{ type: "message", message: { role: "toolResult", toolName: "subagent", details: { mode: "chain", runId: chainRunId, asyncId: chainRunId, results: [] } } },
+				{ type: "message", message: { role: "toolResult", toolName: "subagent", details: { mode: "single", runId: runningRunId, asyncId: runningRunId, results: [] } } },
+				// The chain's bg_wait completion must not be counted again from artifacts.
+				{ type: "message", message: { role: "toolResult", toolName: "bg_wait", details: { mode: "single", results: [], completions: [{ runId: chainRunId, mode: "chain", results: [
+					{ agent: "scout", usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.1, turns: 1 } },
+					{ agent: "worker", usage: { input: 40, output: 8, cacheRead: 0, cacheWrite: 0, cost: 0.4, turns: 3 } },
+				] }] } } },
+			];
+			try {
+				registerSlashCommands!(pi as never, createState(root));
+				await commands.get("subagent-cost")!.handler("", createCommandContext({
+					cwd: root,
+					sessionManager: {
+						getBranch: () => branch,
+						getSessionFile: () => sessionFile,
+						getSessionId: () => "session-parent",
+					},
+				}));
+				const report = String((sent[0] as { content?: unknown }).content ?? "");
+				assert.match(report, /Child \d \(oracle\): ↑30 ↓6 \$0\.3000 \(2 turns\)/);
+				assert.match(report, /Child \d \(scout\): ↑10 ↓2 \$0\.1000 \(1 turn\)/);
+				assert.match(report, /Child \d \(worker\): ↑40 ↓8 \$0\.4000 \(3 turns\)/);
+				assert.equal((report.match(/Child \d+ \(/g) ?? []).length, 3);
+				assert.match(report, /Children: ↑80 ↓16 \$0\.8000 \(6 turns\)/);
+				assert.doesNotMatch(report, /Async child usage unavailable/);
+			} finally {
+				fs.rmSync(path.join(DIRS.async, singleRunId), { recursive: true, force: true });
+				fs.rmSync(path.join(DIRS.async, chainRunId), { recursive: true, force: true });
+				fs.rmSync(path.join(DIRS.async, runningRunId), { recursive: true, force: true });
 			}
 		});
 	});
@@ -659,6 +728,26 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		}, createState(process.cwd()));
 		assert.ok(commands.has("subagents-fleet"));
 		assert.equal(shortcuts.size, 0);
+	});
+
+	it("/subagents-fleet loads and opens the Fleet view on first use", async () => {
+		const commands = new Map<string, RegisteredSlashCommand>();
+		registerSlashCommands!({
+			events: createEventBus(),
+			registerCommand(name: string, spec: RegisteredSlashCommand) { commands.set(name, spec); },
+			registerShortcut() {},
+			sendMessage() {},
+		}, createState(process.cwd()));
+		let opened = 0;
+		await commands.get("subagents-fleet")!.handler("", createCommandContext({ hasUI: true, custom: async () => { opened += 1; return undefined; } }));
+		assert.equal(opened, 1);
+	});
+
+	it("/subagents-fleet answers with the fleet status over RPC, where ui.custom is a no-op", async () => {
+		let opened = 0;
+		const { params } = await captureSlashCommandParams("subagents-fleet", "", process.cwd(), undefined, { mode: "rpc", hasUI: true, custom: async () => { opened += 1; return undefined; } });
+		assert.equal(opened, 0);
+		assert.deepEqual(params, { action: "status", view: "fleet" });
 	});
 
 	it("/subagents-stop keeps the selector within its allocated width", async () => {
