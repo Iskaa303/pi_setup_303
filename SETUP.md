@@ -50,6 +50,8 @@ hm = {
 | `programs.pi-setup.reaGhidra` | `true` | `GHIDRA_INSTALL_DIR` + `JAVA_HOME` for nix Ghidra 12.1.x + JDK 21 |
 | `programs.pi-setup.reaBrowser` | `true` | `REA_BROWSER_EXECUTABLE` points at nix Chromium |
 | `programs.pi-setup.reaFoundationTools` | `true` | Linux: pwntools, Binwalk, Unblob, mitmdump, prlimit paths |
+| `programs.pi-setup.playwright` | `true` | package + register the Playwright MCP server |
+| `programs.pi-setup.playwrightHeadless` | `true` | run the Playwright browser headless |
 
 `~/.pi/agent/settings.json` becomes a symlink into the store:
 
@@ -71,6 +73,7 @@ nix build .#pi-setup                # all of them joined
 nix build .#agent-tui               # the TUI driver the tui extension shells out to
 nix build .#camoufox-js            # optional real-Firefox engine client
 nix build .#rea-agents              # REA CLI + MCP server + skill
+nix build .#playwright-mcp-server   # Playwright MCP server
 nix flake check                     # runs every extension's unit tests
 ```
 
@@ -95,6 +98,7 @@ depends on it.
 | `ketch-web-access` | none (peer deps come from pi itself) |
 | `tui` | none; drives the `agent-tui` binary instead of npm |
 | `rea-mcp` | none; registers the `rea-agents` package as an MCP server at load |
+| `playwright-mcp` | none; registers the `playwright-mcp-server` package as an MCP server at load |
 | `ponytail` | none |
 | `pi-subagents` | acorn, jiti, undici, yaml |
 | `pi-blackhole` | built with tsup during the build (`dist/` is not in the repo) |
@@ -146,6 +150,23 @@ The same variables are exported to your login shell, so `rea doctor` and the
 CLI work outside pi too. Hopper is commercial and stays bring-your-own: set
 `HOPPER_LAUNCHER_PATH` yourself if you have it. Ghidra covers native analysis
 without it.
+
+## Playwright MCP
+
+`programs.pi-setup.playwright` packages
+[Playwright MCP](https://github.com/microsoft/playwright-mcp) (`@playwright/mcp`,
+Apache-2.0) and registers it from `extensions/playwright-mcp`. It gives pi a real
+browser: navigate, click, type, read the page, screenshot, run JS. That is a
+different job from `ketch-web-access` (fetching a page as Markdown) and REA
+(passive observation of a page that is already open).
+
+Playwright's own browser download is disabled at build time (`--ignore-scripts`).
+On Linux the server is launched with `--executable-path` pointing at nixpkgs
+Chromium and `--no-sandbox` (the store has no setuid helper), and it is
+exported to your shell as `PLAYWRIGHT_MCP_BIN` + `PLAYWRIGHT_CHROMIUM`. On macOS
+nixpkgs builds no Chromium, so Playwright falls back to the `chrome` channel —
+install Google Chrome, or set `PLAYWRIGHT_MCP_EXECUTABLE_PATH` yourself.
+`playwrightHeadless = false` shows the browser on a machine with a display.
 
 ## Decider
 

@@ -4,8 +4,8 @@ My personal [pi](https://pi.dev) setup: the extensions and skills I actually
 use, plus vendored copies of the third-party packages they come from so the
 setup is reproducible and the original authors keep their attribution.
 
-Local-first and key-free: REA is the one MCP server here and it drives local
-analysis engines (Ghidra, Chromium); every other tool runs on local or key-free
+Local-first and key-free: the two MCP servers here (REA and Playwright MCP)
+drive local engines and browsers; every other tool runs on local or key-free
 services.
 
 ## Contents
@@ -98,6 +98,11 @@ README and `licenses/`.
   release; the extension registers the server at load time, so
   `~/.pi/agent/mcp.json` is never written. Ghidra, Chromium, pwntools, Binwalk,
   Unblob and mitmdump come from nix and are pointed at with absolute paths.
+- [`extensions/playwright-mcp`](./extensions/playwright-mcp) — registers
+  [Playwright MCP](https://github.com/microsoft/playwright-mcp), so pi can drive
+  a real browser (navigate, click, type, snapshot, run JS) instead of only
+  fetching pages. It is the npm release pointed at nixpkgs Chromium; Playwright's
+  own browser download is skipped, so nothing extra is shipped.
 
 See [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md) for versions, commits,
 and upstream links, [licenses/](./licenses) for every license text, and

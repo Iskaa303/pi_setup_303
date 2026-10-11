@@ -59,6 +59,7 @@ MIT-licensed projects. Full license texts are kept next to the code in
 | [camoufox-js](https://github.com/apify/camoufox-js) | the playwright-core client that drives camoufox (`packages.camoufox-js`) | MPL-2.0, © Apify / daijro |
 | [playwright-core](https://github.com/microsoft/playwright) | automation protocol client pulled in by camoufox-js | Apache-2.0, © Microsoft |
 | [rea](https://github.com/morluto/rea) (`rea-agents`) | the `rea` CLI, its local MCP server, and the bundled `reverse-engineer-anything` skill; `packages.rea-agents` installs the npm release (its tarball already ships the compiled `dist/`), and `extensions/rea-mcp` registers the server | MIT, © 2026 morluto |
+| [Playwright MCP](https://github.com/microsoft/playwright-mcp) (`@playwright/mcp`) | the browser-automation MCP server; `packages.playwright-mcp-server` installs the npm release, and `extensions/playwright-mcp` registers it. Playwright's browser download is skipped at build time; the server is pointed at nixpkgs Chromium | Apache-2.0, © Microsoft |
 | [pi](https://github.com/earendil-works/pi) | the agent itself; `packages.pi` pins `v1.1.0` | MIT, © earendil-works |
 | [pi-flake](https://github.com/ChauDucToan/pi-flake) | declares the `programs.pi-coding-agent` options this flake fills in; `nix/pi.nix` is adapted from its `package.nix` | MIT, © ChauDucToan |
 

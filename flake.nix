@@ -204,6 +204,10 @@
           src = ./extensions/rea-mcp;
           version = "0.1.0";
         };
+        playwright-mcp = {
+          src = ./extensions/playwright-mcp;
+          version = "0.1.0";
+        };
         pi-fff = {
           src = ./vendor/pi-fff;
           version = "0.11.0";
@@ -272,6 +276,41 @@
           mkdir -p $out/share
           cp -a "$pkg/skills/reverse-engineer-anything" $out/share/
           install -Dm644 "$pkg/LICENSE" $out/share/licenses/rea-agents/LICENSE
+        '';
+
+      # Playwright MCP: Microsoft's browser-automation MCP server. The npm
+      # tarball ships compiled JS, so this only installs it plus its deps;
+      # nix/playwright-mcp/package.json is the usual shim. --ignore-scripts
+      # stops playwright's postinstall from downloading browsers, because the
+      # module points it at nixpkgs Chromium instead.
+      mkPlaywrightMcp = pkgs:
+        let
+          version = "0.0.83";
+          deps = pkgs.buildNpmPackage {
+            pname = "playwright-mcp-deps";
+            inherit version;
+            src = ./nix/playwright-mcp;
+            dontNpmBuild = true;
+            npmFlags = [ "--ignore-scripts" ];
+            postPatch = ''
+              cp ${./nix/locks/playwright-mcp.json} package-lock.json
+            '';
+            npmDepsFetcherVersion = 2;
+            dontFixup = true;
+            npmDepsHash = "sha256-LO3jXXF3gRhxLnKjWQ7yAbKQpVRQ2ekMPFPThKB3FsM=";
+          };
+        in
+        pkgs.runCommand "playwright-mcp-${version}" {
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+        } ''
+          pkg="$out/lib/node_modules/playwright-mcp-nix/node_modules/@playwright/mcp"
+          mkdir -p $out/lib/node_modules
+          cp -a ${deps}/lib/node_modules/. $out/lib/node_modules/
+          chmod -R u+w $out
+          mkdir -p $out/bin
+          makeWrapper ${pkgs.nodejs}/bin/node $out/bin/playwright-mcp \
+            --add-flags "$pkg/cli.js"
+          install -Dm644 "$pkg/LICENSE" $out/share/licenses/playwright-mcp/LICENSE
         '';
 
       # agent-tui: the virtual-terminal driver behind the `tui` extension.
@@ -383,6 +422,7 @@
           ketch = pkgs.ketch;
           camoufox-js = mkCamoufoxJs pkgs;
           rea-agents = mkReaAgents pkgs;
+          playwright-mcp-server = mkPlaywrightMcp pkgs;
           agent-tui = mkAgentTui pkgs;
           extensions = mkExtensionPkgs pkgs;
           attentionSound = import ./nix/attention-sound.nix { inherit pkgs; };
@@ -393,7 +433,7 @@
           };
         in
         rec {
-          inherit ketch camoufox-js rea-agents agent-tui pi attentionSound;
+          inherit ketch camoufox-js rea-agents playwright-mcp-server agent-tui pi attentionSound;
 
           # All extensions in one output, for inspection or `pi install`.
           pi-setup = pkgs.symlinkJoin {
@@ -467,6 +507,19 @@
             // lib.optionalAttrs (cfg.rea && cfg.reaFoundationTools && linuxX64) {
               REA_PWNTOOLS_PYTHON = "${pwntoolsPython}/bin/python3";
             };
+
+          # Playwright MCP: same idea, the browser is a store path. On macOS
+          # nixpkgs builds no Chromium, so the server falls back to its own
+          # `chrome` channel there.
+          playwrightEnv =
+            lib.optionalAttrs cfg.playwright {
+              PLAYWRIGHT_MCP_BIN = "${own.playwright-mcp-server}/bin/playwright-mcp";
+              PLAYWRIGHT_HEADLESS = lib.boolToString cfg.playwrightHeadless;
+            }
+            // lib.optionalAttrs (cfg.playwright && linux) {
+              PLAYWRIGHT_CHROMIUM = "${pkgs.chromium}/bin/chromium";
+            };
+          toolEnv = reaEnv // playwrightEnv;
         in
         {
           # pi-flake supplies the programs.pi-coding-agent option surface; this
@@ -644,6 +697,27 @@
               '';
             };
 
+            playwright = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = ''
+                Package Microsoft's Playwright MCP server and register it for
+                pi, so the agent can drive a real browser: navigate, click,
+                type and inspect live pages through accessibility snapshots.
+                Complements ketch-web-access (fetch/search) and REA (passive
+                observation).
+              '';
+            };
+
+            playwrightHeadless = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = ''
+                Run the Playwright browser headless. Set to false on a machine
+                with a display when you want to watch the browser work.
+              '';
+            };
+
 
           };
 
@@ -653,11 +727,12 @@
             # notifier by default, so without this nothing is ever notified.
             home.packages = [ cfg.ketch pkgs.libnotify cfg.agentTui ]
               ++ lib.optionals cfg.rea [ own.rea-agents ]
+              ++ lib.optionals cfg.playwright [ own.playwright-mcp-server ]
               ++ lib.optionals cfg.videoTools [ pkgs.ffmpeg pkgs.yt-dlp ];
 
-            # REA's provider paths are absolute store paths, so exporting them
-            # makes `rea` work from a plain shell as well as from pi.
-            home.sessionVariables = reaEnv;
+            # Absolute store paths for the MCP servers, so the CLIs also work
+            # from a plain shell, not only from pi.
+            home.sessionVariables = toolEnv;
 
             # ~/.pi/agent/extensions/<name> -> /nix/store/... so pi finds each
             # extension by its real name instead of a store hash.
@@ -698,7 +773,7 @@
                 # The worker resolves camoufox-js from this directory.
                 CAMOUFOX_JS = "${own.camoufox-js}/lib/node_modules/camoufox-js-nix/node_modules";
               }
-              // reaEnv
+              // toolEnv
               // lib.optionalAttrs (pkgs.stdenv.hostPlatform.isLinux) {
                 # Camoufox's Firefox binary links against libraries NixOS does not
                 # put on any default path. cc.lib is included because pi's own
@@ -727,6 +802,7 @@
           attention-notify = runTests "attention-notify";
           tui = runTests "tui";
           rea-mcp = runTests "rea-mcp";
+          playwright-mcp = runTests "playwright-mcp";
         }
       );
 
