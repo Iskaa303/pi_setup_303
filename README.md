@@ -4,7 +4,9 @@ My personal [pi](https://pi.dev) setup: the extensions and skills I actually
 use, plus vendored copies of the third-party packages they come from so the
 setup is reproducible and the original authors keep their attribution.
 
-No MCP, no API keys: every tool here runs on local or key-free services.
+Local-first and key-free: REA is the one MCP server here and it drives local
+analysis engines (Ghidra, Chromium); every other tool runs on local or key-free
+services.
 
 ## Contents
 
@@ -62,7 +64,7 @@ deliberate edit of those two attributes plus `nix build .#pi --refresh`.
 | [@narumitw/pi-statusline](https://pi.dev/packages/@narumitw/pi-statusline) | the status line | MIT |
 | [@ff-labs/pi-fff](https://pi.dev/packages/@ff-labs/pi-fff) | fuzzy file and content search (`fffind`) | MIT |
 
-Not vendored, written here, four extensions of my own:
+Not vendored, written here, five extensions of my own:
 
 - [`extensions/ketch-web-access`](./extensions/ketch-web-access)
 replaces pi-web-access with Ketch as the only web provider, registering the
@@ -88,6 +90,14 @@ README and `licenses/`.
   runs the program in a virtual terminal. This flake packages agent-tui's
   prebuilt binary; the extension exposes `tui_run`, `tui_screenshot`,
   `tui_type`, `tui_press`, `tui_wait`, `tui_kill`, and `tui_sessions`.
+- [`extensions/rea-mcp`](./extensions/rea-mcp) — connects pi to
+  [REA](https://github.com/morluto/rea), one MCP server for reverse engineering:
+  Ghidra-backed native binaries, JavaScript/Electron, .NET, firmware and
+  websites, with Chromium for browser analysis. The flake packages the `rea`
+  CLI, the MCP server and REA's `reverse-engineer-anything` skill from the npm
+  release; the extension registers the server at load time, so
+  `~/.pi/agent/mcp.json` is never written. Ghidra, Chromium, pwntools, Binwalk,
+  Unblob and mitmdump come from nix and are pointed at with absolute paths.
 
 See [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md) for versions, commits,
 and upstream links, [licenses/](./licenses) for every license text, and

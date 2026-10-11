@@ -46,6 +46,10 @@ hm = {
 | `programs.pi-setup.agentTui` | this flake's `agent-tui` | added to `home.packages`, `AGENT_TUI_BIN` set |
 | `programs.pi-setup.camoufox` | `false` | `CAMOUFOX_JS` points at the nix-built client |
 | `programs.pi-setup.videoTools` | `true` | ffmpeg + yt-dlp on PATH for transcripts and frames |
+| `programs.pi-setup.rea` | `true` | package REA, register its MCP server, install its skill |
+| `programs.pi-setup.reaGhidra` | `true` | `GHIDRA_INSTALL_DIR` + `JAVA_HOME` for nix Ghidra 12.1.x + JDK 21 |
+| `programs.pi-setup.reaBrowser` | `true` | `REA_BROWSER_EXECUTABLE` points at nix Chromium |
+| `programs.pi-setup.reaFoundationTools` | `true` | Linux: pwntools, Binwalk, Unblob, mitmdump, prlimit paths |
 
 `~/.pi/agent/settings.json` becomes a symlink into the store:
 
@@ -66,6 +70,7 @@ nix build .#ketch-web-access        # or .#ponytail, .#pi-subagents, .#tui, ...
 nix build .#pi-setup                # all of them joined
 nix build .#agent-tui               # the TUI driver the tui extension shells out to
 nix build .#camoufox-js            # optional real-Firefox engine client
+nix build .#rea-agents              # REA CLI + MCP server + skill
 nix flake check                     # runs every extension's unit tests
 ```
 
@@ -89,6 +94,7 @@ depends on it.
 |---|---|
 | `ketch-web-access` | none (peer deps come from pi itself) |
 | `tui` | none; drives the `agent-tui` binary instead of npm |
+| `rea-mcp` | none; registers the `rea-agents` package as an MCP server at load |
 | `ponytail` | none |
 | `pi-subagents` | acorn, jiti, undici, yaml |
 | `pi-blackhole` | built with tsup during the build (`dist/` is not in the repo) |
@@ -117,6 +123,29 @@ Until it is preserved, `ketch_browser {action: "status"}` reports "the browser
 binary is missing from ~/.cache/camoufox" and suggests `npx camoufox-js fetch`
 — deliberately not `npm install camoufox-js`, which would shadow the nix client
 with a second, divergent copy.
+
+## REA
+
+`programs.pi-setup.rea` packages [REA](https://github.com/morluto/rea)
+(`rea-agents`, MIT) — a CLI and local MCP server for reverse engineering — and
+installs its `reverse-engineer-anything` skill under `~/.agents/skills`, which
+pi discovers. `extensions/rea-mcp` registers the server when pi loads, so
+`~/.pi/agent/mcp.json` is never touched, and setting
+`programs.pi-setup.rea = false` turns the whole thing off.
+
+Provider paths always come from nix, never from `PATH`, because REA rejects
+relative tool configuration:
+
+| Option | Environment it fills in |
+|---|---|
+| `reaGhidra` | `GHIDRA_INSTALL_DIR`, `JAVA_HOME` (Ghidra 12.1.x + JDK 21 from nixpkgs) |
+| `reaBrowser` | `REA_BROWSER_EXECUTABLE` (+ `REA_BROWSER_NO_SANDBOX` on Linux) |
+| `reaFoundationTools` | `REA_PWNTOOLS_PYTHON`, `REA_BINWALK_COMMAND`, `REA_UNBLOB_COMMAND`, `REA_MITMDUMP_COMMAND`, the `prlimit`s |
+
+The same variables are exported to your login shell, so `rea doctor` and the
+CLI work outside pi too. Hopper is commercial and stays bring-your-own: set
+`HOPPER_LAUNCHER_PATH` yourself if you have it. Ghidra covers native analysis
+without it.
 
 ## Decider
 

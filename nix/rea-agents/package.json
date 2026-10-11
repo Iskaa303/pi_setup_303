@@ -1,0 +1,10 @@
+{
+  "name": "rea-agents-nix",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Build shim: packages REA (rea-agents) so nix can provide its CLI and MCP server",
+  "license": "MIT",
+  "dependencies": {
+    "rea-agents": "6.4.0"
+  }
+}

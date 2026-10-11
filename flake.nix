@@ -200,6 +200,10 @@
           src = ./extensions/tui;
           version = "0.1.0";
         };
+        rea-mcp = {
+          src = ./extensions/rea-mcp;
+          version = "0.1.0";
+        };
         pi-fff = {
           src = ./vendor/pi-fff;
           version = "0.11.0";
@@ -230,6 +234,44 @@
           mkdir -p $out/lib/node_modules
           cp -a ${deps}/lib/node_modules/. $out/lib/node_modules/
           chmod -R u+w $out
+        '';
+
+      # REA ("Reverse Engineer Anything"): the `rea` CLI and its MCP server.
+      # The published npm tarball already ships the compiled dist/ and the
+      # reverse-engineer-anything skill, so this only installs it plus its
+      # production dependencies. nix/rea-agents/package.json is a thin shim so
+      # the lock stays self-contained, the same shape as nix/camoufox-js.
+      mkReaAgents = pkgs:
+        let
+          version = "6.4.0";
+          deps = pkgs.buildNpmPackage {
+            pname = "rea-agents-deps";
+            inherit version;
+            src = ./nix/rea-agents;
+            dontNpmBuild = true;
+            postPatch = ''
+              cp ${./nix/locks/rea-agents.json} package-lock.json
+            '';
+            npmDepsFetcherVersion = 2;
+            dontFixup = true;
+            npmDepsHash = "sha256-h3hFBh6xdp5bY7kzVFLToYURWMr9zbs1oQbuB/irOys=";
+          };
+        in
+        pkgs.runCommand "rea-agents-${version}" {
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+        } ''
+          pkg="$out/lib/node_modules/rea-agents-nix/node_modules/rea-agents"
+          mkdir -p $out/lib/node_modules
+          cp -a ${deps}/lib/node_modules/. $out/lib/node_modules/
+          chmod -R u+w $out
+          mkdir -p $out/bin
+          makeWrapper ${pkgs.nodejs}/bin/node $out/bin/rea \
+            --add-flags "$pkg/scripts/rea.mjs"
+          ln -s rea $out/bin/rea-agents
+          # The bundled skill is the workflow instruction set the agent loads.
+          mkdir -p $out/share
+          cp -a "$pkg/skills/reverse-engineer-anything" $out/share/
+          install -Dm644 "$pkg/LICENSE" $out/share/licenses/rea-agents/LICENSE
         '';
 
       # agent-tui: the virtual-terminal driver behind the `tui` extension.
@@ -340,6 +382,7 @@
         let
           ketch = pkgs.ketch;
           camoufox-js = mkCamoufoxJs pkgs;
+          rea-agents = mkReaAgents pkgs;
           agent-tui = mkAgentTui pkgs;
           extensions = mkExtensionPkgs pkgs;
           attentionSound = import ./nix/attention-sound.nix { inherit pkgs; };
@@ -350,7 +393,7 @@
           };
         in
         rec {
-          inherit ketch camoufox-js agent-tui pi attentionSound;
+          inherit ketch camoufox-js rea-agents agent-tui pi attentionSound;
 
           # All extensions in one output, for inspection or `pi install`.
           pi-setup = pkgs.symlinkJoin {
@@ -390,6 +433,40 @@
               evidence-auditor = webSubagents;
             };
           } // cfg.subagents;
+
+          # REA provider/tool paths. REA rejects relative tool configuration, so
+          # every value is an absolute store path. The binary-layout/crash and
+          # firmware analyzers are Linux-only, and pwntools is Linux x64.
+          linux = pkgs.stdenv.hostPlatform.isLinux;
+          linuxX64 = linux && pkgs.stdenv.hostPlatform.isx86_64;
+          pwntoolsPython = pkgs.python3.withPackages (ps: [ ps.pwntools ]);
+          reaEnv =
+            lib.optionalAttrs cfg.rea {
+              REA_BIN = "${own.rea-agents}/bin/rea";
+            }
+            // lib.optionalAttrs (cfg.rea && cfg.reaGhidra) {
+              GHIDRA_INSTALL_DIR = "${pkgs.ghidra}/lib/ghidra";
+              JAVA_HOME = "${pkgs.jdk21.home}";
+            }
+            // lib.optionalAttrs (cfg.rea && cfg.reaBrowser) {
+              REA_BROWSER_EXECUTABLE = "${pkgs.chromium}/bin/chromium";
+            }
+            // lib.optionalAttrs (cfg.rea && cfg.reaBrowser && linux) {
+              # The store has no setuid helper, so Chromium cannot sandbox itself.
+              REA_BROWSER_NO_SANDBOX = "true";
+            }
+            // lib.optionalAttrs (cfg.rea && cfg.reaFoundationTools && linux) {
+              # prlimit defaults to /usr/bin/prlimit, which NixOS does not have.
+              REA_FIRMWARE_PRLIMIT_COMMAND = "${pkgs.util-linux}/bin/prlimit";
+              REA_EVM_PRLIMIT_COMMAND = "${pkgs.util-linux}/bin/prlimit";
+              REA_JAVASCRIPT_PRLIMIT_COMMAND = "${pkgs.util-linux}/bin/prlimit";
+              REA_BINWALK_COMMAND = "${pkgs.binwalk}/bin/binwalk";
+              REA_UNBLOB_COMMAND = "${pkgs.unblob}/bin/unblob";
+              REA_MITMDUMP_COMMAND = "${pkgs.mitmproxy}/bin/mitmdump";
+            }
+            // lib.optionalAttrs (cfg.rea && cfg.reaFoundationTools && linuxX64) {
+              REA_PWNTOOLS_PYTHON = "${pwntoolsPython}/bin/python3";
+            };
         in
         {
           # pi-flake supplies the programs.pi-coding-agent option surface; this
@@ -517,6 +594,56 @@
               '';
             };
 
+            rea = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = ''
+                Package REA (rea-agents) and register its MCP server for pi, and
+                install the reverse-engineer-anything skill under
+                ~/.agents/skills. The extension registers the server at load
+                time, so ~/.pi/agent/mcp.json is never written.
+              '';
+            };
+
+            reaGhidra = lib.mkOption {
+              type = lib.types.bool;
+              default = builtins.elem pkgs.stdenv.hostPlatform.system [
+                "x86_64-linux"
+                "aarch64-linux"
+                "aarch64-darwin"
+              ];
+              defaultText = lib.literalExpression "true where nixpkgs builds Ghidra";
+              description = ''
+                Point REA at nixpkgs Ghidra (12.1.x) and its JDK 21 for native
+                binary analysis. Ghidra is not put on PATH; only REA is told
+                where it lives. nixpkgs has no x86_64-darwin build.
+              '';
+            };
+
+            reaBrowser = lib.mkOption {
+              type = lib.types.bool;
+              default = pkgs.stdenv.hostPlatform.isLinux;
+              defaultText = lib.literalExpression "true on Linux";
+              description = ''
+                Point REA at nixpkgs Chromium for CDP page observation,
+                Playwright scenario capture and website module tracing. On
+                Linux the sandbox is disabled because the store has no setuid
+                helper. nixpkgs builds Chromium for Linux only; on macOS set
+                REA_BROWSER_EXECUTABLE yourself or leave this off.
+              '';
+            };
+
+            reaFoundationTools = lib.mkOption {
+              type = lib.types.bool;
+              default = pkgs.stdenv.hostPlatform.isLinux;
+              defaultText = lib.literalExpression "true on Linux";
+              description = ''
+                Wire the Linux analyzers REA verifies: pwntools (ELF layout,
+                recorded crashes, Linux x64), Binwalk + Unblob (firmware) and
+                mitmdump (native network captures).
+              '';
+            };
+
 
           };
 
@@ -524,7 +651,13 @@
             # libnotify gives notify-send: pi-notify and attention-notify both
             # shell out to it for desktop notifications, and NixOS ships no
             # notifier by default, so without this nothing is ever notified.
-            home.packages = [ cfg.ketch pkgs.libnotify cfg.agentTui ] ++ lib.optionals cfg.videoTools [ pkgs.ffmpeg pkgs.yt-dlp ];
+            home.packages = [ cfg.ketch pkgs.libnotify cfg.agentTui ]
+              ++ lib.optionals cfg.rea [ own.rea-agents ]
+              ++ lib.optionals cfg.videoTools [ pkgs.ffmpeg pkgs.yt-dlp ];
+
+            # REA's provider paths are absolute store paths, so exporting them
+            # makes `rea` work from a plain shell as well as from pi.
+            home.sessionVariables = reaEnv;
 
             # ~/.pi/agent/extensions/<name> -> /nix/store/... so pi finds each
             # extension by its real name instead of a store hash.
@@ -540,6 +673,10 @@
               // lib.optionalAttrs (cfg.researcher != null) {
                 # user agents outrank package agents and builtins
                 ".pi/agent/agents/researcher.md".text = cfg.researcher;
+              }
+              // lib.optionalAttrs cfg.rea {
+                # pi discovers ~/.agents/skills; this is REA's own skill root.
+                ".agents/skills/reverse-engineer-anything".source = "${own.rea-agents}/share/reverse-engineer-anything";
               };
 
 
@@ -561,6 +698,7 @@
                 # The worker resolves camoufox-js from this directory.
                 CAMOUFOX_JS = "${own.camoufox-js}/lib/node_modules/camoufox-js-nix/node_modules";
               }
+              // reaEnv
               // lib.optionalAttrs (pkgs.stdenv.hostPlatform.isLinux) {
                 # Camoufox's Firefox binary links against libraries NixOS does not
                 # put on any default path. cc.lib is included because pi's own
@@ -588,6 +726,7 @@
           decider = runTests "decider";
           attention-notify = runTests "attention-notify";
           tui = runTests "tui";
+          rea-mcp = runTests "rea-mcp";
         }
       );
 
