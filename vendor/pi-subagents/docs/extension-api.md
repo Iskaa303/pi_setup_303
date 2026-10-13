@@ -596,7 +596,7 @@ The API returns discriminated structured results with canonical project root, bi
 
 A host that embeds this extension owns whether completion wakes can be delivered at all.
 
-Ordinary async and foreground completion wakes use `registerSubagentNotify` and `sendCompletion`. They listen for completion events and deliver through `pi.sendMessage(..., { triggerTurn })`. When the parent is idle, every pi-subagents notice that should start a turn (completions, supervisor asks, control and steering notices, wait subscriptions) is instead appended without a turn, followed by one short user message, `Subagent updates above.`, sent with `pi.sendUserMessage`. Pi runs `before_agent_start` only for prompts, so this keeps extension-set system prompt sections in the woken run. A busy parent still gets the notice as a steering message. Session shutdown stops the result watcher and disposes this completion notifier. `createWaitSubscriptionManager` is separate: it is the explicit non-blocking `bg_wait` subscription path for work without native notification, not the ordinary completion wake path.
+Ordinary async and foreground completion wakes use `registerSubagentNotify` and `sendCompletion`. They listen for completion events and deliver through `pi.sendMessage(..., { triggerTurn })`. When the parent is idle, every pi-subagents notice that should start a turn (completions, supervisor asks, control and steering notices, wait subscriptions) is instead appended without a turn, followed by one user message, `PARENT_WAKE_TEXT` from `src/shared/parent-wake.ts`, sent with `pi.sendUserMessage`. Pi runs `before_agent_start` only for prompts, so this keeps extension-set system prompt sections in the woken run. A busy parent still gets the notice as a steering message. After the user aborts a parent run in a host with a UI, these notices are only appended, with no turn and no wake message, until the next parent run starts. Session shutdown stops the result watcher and disposes this completion notifier. `createWaitSubscriptionManager` is separate: it is the explicit non-blocking `bg_wait` subscription path for work without native notification, not the ordinary completion wake path.
 
 Each completion notice is a custom message with `customType: "subagent-notify"`. Its `content` is the text the model reads. Pi does not send `details` to the model, so hosts can use it to match a notice to its runs by id without parsing the text. `details.runs` has one entry per finished run, in the order of the notice. A grouped notice has several entries. Each entry has `agent` and `status` (`completed`, `failed`, `paused` or `stopped`). When known, an entry also has these fields:
 
@@ -623,6 +623,10 @@ If your host reclaims idle sessions, keep a session alive while it still has liv
 - Match `sessionId` in `status.json` against both forms. It is resolved as `getSessionFile() ?? getSessionId()`, so it is normally the parent's session *file path*, but a session that is not persisted records a bare session id instead.
 
 The symptom when this is missed is quiet and easy to misattribute: subagents appear never to report back, which looks like a fault in this extension rather than in the host that disposed the listener.
+
+## Component screens over RPC
+
+`/subagents-fleet`, `/subagents-stop` and the `/subagents` model and thinking pickers draw a `ctx.ui.custom()` component in the TUI. In every other mode they fall back to text or `ctx.ui.select`, because stock Pi RPC defines `custom()` as a no-op. A host that runs Pi in RPC mode and renders `custom()` components itself, such as pi-web, can set `PI_SUBAGENTS_COMPONENT_UI=1` in Pi's environment to get the component screens.
 
 ## Runtime files
 

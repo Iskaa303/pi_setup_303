@@ -36,7 +36,6 @@ import { normalizeParentModel, resolveEffectiveSubagentModel, resolveModelOrigin
 import { projectChainOutputSchemas, resolveEffectiveOutputSchema } from "../shared/child-launch-plan.ts";
 import { formatRetainedChildren, listRetainedChildren } from "../background/retained-children.ts";
 import { resolveModelScopesForAgent, type ModelScopeConfig } from "../shared/model-scope.ts";
-import { recordRun } from "../shared/run-history.ts";
 import {
 	getStepAgents,
 	isParallelStep,
@@ -946,7 +945,7 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
 	});
 }
 
-function resolveForegroundResumeTarget(params: SubagentParamsLike, state: SubagentState, options: { exactOnly?: boolean } = {}): { runId: string; mode: SubagentRunMode; state: "complete"; agent: string; index: number; cwd: string; sessionFile: string; model?: string; thinking?: string; launchContractDigest?: string; resumeContract?: ForegroundResumeChild["resumeContract"]; extensionBindings?: ExtensionBindings; capabilityCeiling?: ResolvedSubagentCapabilityCeiling } | undefined {
+function resolveForegroundResumeTarget(params: SubagentParamsLike, state: SubagentState, options: { exactOnly?: boolean } = {}): { runId: string; mode: SubagentRunMode; state: "complete"; agent: string; index: number; cwd: string; sessionFile: string; model?: string; thinking?: string; launchContractDigest?: string; resumeContract?: ForegroundResumeChild["resumeContract"]; savedOutputPath?: string; extensionBindings?: ExtensionBindings; capabilityCeiling?: ResolvedSubagentCapabilityCeiling } | undefined {
 	const requested = (params.id ?? params.runId)?.trim();
 	if (!requested || !state.foregroundRuns?.size || !state.currentSessionId) return undefined;
 	const direct = state.foregroundRuns.get(requested);
@@ -978,6 +977,7 @@ function resolveForegroundResumeTarget(params: SubagentParamsLike, state: Subage
 		...(child.thinking ? { thinking: child.thinking } : {}),
 		...(child.launchContractDigest ? { launchContractDigest: child.launchContractDigest } : {}),
 		...(child.resumeContract ? { resumeContract: child.resumeContract } : {}),
+		...(child.savedOutputPath ? { savedOutputPath: child.savedOutputPath } : {}),
 		...(child.extensionBindings ? { extensionBindings: normalizeExtensionBindings(child.extensionBindings)!.value } : {}),
 		...(child.requiredExtensions ? { requiredExtensions: child.requiredExtensions } : {}),
 		...(child.capabilityCeiling ? { capabilityCeiling: child.capabilityCeiling } : {}),
@@ -2242,6 +2242,13 @@ async function resumeAsyncRun(input: {
 	const availableModels = input.ctx.modelRegistry.getAvailable().map(toModelInfo);
 	const parentModel = input.parentModel;
 	const revivalAsyncDir = path.join(DIRS.async, runId);
+	const revivalOutputBaseDir = resolveSingleRunOutputBaseDir(input.deps, artifactsDir, runId);
+	const inheritedOutput = foregroundContract?.output ?? recoveryDescriptor?.outputPath;
+	// The original run owns its saved output, so a resume without its own output writes next to it instead of over it.
+	// Workflow resumes are routed by the workflow's output claims instead.
+	const inheritedOutputPath = input.params.output === undefined && input.params.workflowParentRunId === undefined
+		? (target.source === "foreground" ? target.savedOutputPath : undefined) ?? resolveSingleOutputPath(inheritedOutput, input.requestCwd, effectiveCwd, revivalOutputBaseDir)
+		: undefined;
 	const result = await executeAsyncSingle(runId, compactOptional<Parameters<typeof executeAsyncSingle>[1]>({
 		agent: target.agent,
 		task: buildRevivedAsyncTask(target as Parameters<typeof buildRevivedAsyncTask>[0], effectiveFollowUp),
@@ -2289,7 +2296,7 @@ async function resumeAsyncRun(input: {
 		thinkingCeiling: recoveryDescriptor?.thinkingCeiling ?? ("thinkingCeiling" in target ? target.thinkingCeiling : undefined),
 		extensionBindings: recoveryDescriptor?.extensionBindings ?? ("extensionBindings" in target ? target.extensionBindings : undefined),
 		requiredExtensions: recoveryDescriptor?.requiredExtensions ?? (target as { requiredExtensions?: SteeringRecoveryDescriptor["requiredExtensions"] }).requiredExtensions,
-		outputBaseDir: resolveSingleRunOutputBaseDir(input.deps, artifactsDir, runId),
+		outputBaseDir: revivalOutputBaseDir,
 		maxSubagentDepth: recoveryDescriptor?.maxSubagentDepth ?? resolveCurrentMaxSubagentDepth(input.deps.config.maxSubagentDepth, input.deps.childRuntime),
 		waitToolEnabled: input.deps.waitToolEnabled,
 		waitToolDefaultTimeoutMs: input.deps.waitToolDefaultTimeoutMs,
@@ -2308,7 +2315,7 @@ async function resumeAsyncRun(input: {
 		controlIntercomTarget: intercomBridge.active ? intercomBridge.orchestratorTarget : undefined,
 		childIntercomTarget: intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
 		availableModels,
-		output: input.params.output !== undefined ? input.params.output : foregroundContract?.output ?? recoveryDescriptor?.outputPath,
+		output: input.params.output !== undefined ? input.params.output : inheritedOutputPath ? suffixedOutputPath(inheritedOutputPath, runId.slice(0, 8)) : inheritedOutput,
 		outputMode: input.params.outputMode ?? foregroundContract?.outputMode ?? recoveryDescriptor?.outputMode,
 		outputClaimPath: input.params.workflowOutputClaimPath,
 		...(agentContract ? { agentContract } : {}),
@@ -3726,11 +3733,14 @@ function resolveSingleRunOutputBaseDir(deps: ExecutorDeps, artifactsDir: string,
 	return resolveConfiguredSingleRunOutputBaseDir(deps) ?? path.join(artifactsDir, "outputs", sanitizeRunPathSegment(runId));
 }
 
+/** `<dir>/<name>.<suffix><ext>` next to outputPath, with `.md` when it has no extension. */
+function suffixedOutputPath(outputPath: string, suffix: string): string {
+	const parsed = path.parse(outputPath);
+	return path.join(parsed.dir, `${parsed.name}.${suffix}${parsed.ext || ".md"}`);
+}
+
 function workflowChildDefaultOutput(aggregateOutputPath: string | undefined, artifactsDir: string, workflowRunId: string, workflowKey: string): string {
-	if (aggregateOutputPath) {
-		const parsed = path.parse(aggregateOutputPath);
-		return path.join(parsed.dir, `${parsed.name}.${workflowKey}${parsed.ext || ".md"}`);
-	}
+	if (aggregateOutputPath) return suffixedOutputPath(aggregateOutputPath, workflowKey);
 	return path.join(artifactsDir, "outputs", sanitizeRunPathSegment(workflowRunId), `${workflowKey}.md`);
 }
 
@@ -3842,7 +3852,7 @@ function resolveWorkflowChildOutputPath(input: {
 	state?: SubagentState;
 	key: string;
 	params: Record<string, unknown>;
-}): { path?: string; inherited: boolean; resumedOutput?: string } {
+}): { path?: string; inherited: boolean; resumedSavedPath?: string } {
 	const rawOutput = input.params.output;
 	const hasExplicitOutput = typeof rawOutput === "string" || typeof rawOutput === "boolean";
 	if (typeof input.params.resume === "string" && (!hasExplicitOutput || rawOutput === true || rawOutput === "true")) {
@@ -3854,9 +3864,8 @@ function resolveWorkflowChildOutputPath(input: {
 		}, input.state);
 		const recoveryOutput = "recoveryDescriptor" in target ? target.recoveryDescriptor?.outputPath : undefined;
 		if (hasExplicitOutput) return { path: recoveryOutput, inherited: false };
-		// An output-less foreground resume reuses its recorded output; only an absolute path is known before the new run id exists.
-		const foregroundOutput = target.source === "foreground" ? target.resumeContract?.output : undefined;
-		return { path: recoveryOutput, inherited: false, resumedOutput: recoveryOutput ?? (typeof foregroundOutput === "string" && path.isAbsolute(foregroundOutput) ? foregroundOutput : undefined) };
+		const savedPath = recoveryOutput ?? (target.source === "foreground" ? target.savedOutputPath ?? resolveSingleOutputPath(target.resumeContract?.output, input.ctxCwd) : undefined);
+		return { inherited: false, ...(savedPath ? { resumedSavedPath: savedPath } : {}) };
 	}
 	const childCwd = resolveWorkflowChildLocalCwd(input);
 	let agentOutput: string | undefined;
@@ -3909,10 +3918,11 @@ function workflowChildOutputClaims(input: {
 	}
 	const overrides = new Map<string, string>();
 	for (const entry of resolvedEntries) {
-		// An output-less resume keeps its retained path unless an earlier child of this workflow already owns it.
-		const resumeCollides = entry.resumedOutput !== undefined && input.claimedOutputPaths.has(resolveWorkflowHostOutputClaimPath(entry.resumedOutput));
-		if (resumeCollides || (entry.inherited && entry.path && (paths.get(resolveWorkflowHostOutputClaimPath(entry.path)) ?? 0) > 1)) {
-			const output = workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.workflowRunId, entry.key);
+		// The resumed run owns the report it saved, inside or outside this workflow, so an output-less resume writes its own.
+		if (entry.resumedSavedPath || (entry.inherited && entry.path && (paths.get(resolveWorkflowHostOutputClaimPath(entry.path)) ?? 0) > 1)) {
+			let output = workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.workflowRunId, entry.key);
+			// A rerun of the same workflow and key generates the very file the resumed run saved.
+			if (entry.resumedSavedPath && resolveWorkflowHostOutputClaimPath(output) === resolveWorkflowHostOutputClaimPath(entry.resumedSavedPath)) output = suffixedOutputPath(output, input.workflowRunId.slice(0, 8));
 			overrides.set(entry.key, output);
 			entry.path = output;
 		}
@@ -3924,14 +3934,6 @@ function workflowChildOutputClaims(input: {
 		const claimPath = resolveWorkflowHostOutputClaimPath(resolved);
 		const previous = claims.get(claimPath);
 		if (previous) return { error: `Workflow children '${previous}' and '${key}' resolve output to the same path: ${resolved}. Use distinct child output paths.` };
-		claims.set(claimPath, key);
-		childClaims.set(key, claimPath);
-	}
-	// Record a discovered output-less resume path for later admissions without adding same-batch duplicate errors.
-	for (const { key, path: resolved, resumedOutput } of resolvedEntries) {
-		if (resolved || !resumedOutput) continue;
-		const claimPath = resolveWorkflowHostOutputClaimPath(resumedOutput);
-		if (claims.has(claimPath)) continue;
 		claims.set(claimPath, key);
 		childClaims.set(key, claimPath);
 	}
@@ -4213,7 +4215,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	if (shouldForkAgent(contextPolicy, params.agent!)) {
 		task = wrapForkTask(task);
 	}
-	const cleanTask = task;
 	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, singleCwd, resolveSingleRunOutputBaseDir(deps, artifactsDir, runId));
 	const validationError = validateFileOnlyOutputMode(effectiveOutputMode, outputPath, `Single run (${params.agent})`);
 	if (validationError) {
@@ -4416,7 +4417,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 						}
 					}
 				}
-				recordRun(params.agent!, cleanTask, result.exitCode, result.progressSummary?.durationMs ?? 0, result);
 			},
 			timeoutMs: data.timeoutMs,
 			deadlineAt,
@@ -4452,10 +4452,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			finishTrackedForegroundChild();
 		}
 	}
-	if (!r.detached) {
-		recordRun(params.agent!, cleanTask, r.exitCode, r.progressSummary?.durationMs ?? 0, r);
-	}
-
 	let worktreeHandoff: Awaited<ReturnType<typeof finalizeSingleWorktreeHandoff>> | undefined;
 	if (worktreeSetup) {
 		worktreeHandoff = r.detached
@@ -5461,11 +5457,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			if (launchBlockingErrors.length > 0) {
 				return buildRequestedModeError(requestParams, `Workflow '${_id}' validation failed before child launch; no children launched. ${launchBlockingErrors.map((error) => error.message).join(" ")}`);
 			}
-			// A package chain's per-step stop check defeats static launch counting; runtime fan-out enforcement still applies.
-			const structuredResource = workflowResource?.provenance.name === "chain" || workflowResource?.provenance.name === "tasks";
-			for (const warning of workflowValidation.warnings ?? []) {
-				if (!(structuredResource && warning.kind === "dynamic-spawn-count")) console.warn(`[pi-subagents] ${warning.message}`);
-			}
+			// Validation warnings belong to the validate action; a launch does not repeat them on every run.
 			const acceptanceErrors = validateAcceptanceInput(requestParams.acceptance);
 			if (acceptanceErrors.length > 0) return buildRequestedModeError(requestParams, acceptanceErrors.join(" "));
 			// Capture mandatory host extensions at admission: script children may launch after the host disposes its registration.

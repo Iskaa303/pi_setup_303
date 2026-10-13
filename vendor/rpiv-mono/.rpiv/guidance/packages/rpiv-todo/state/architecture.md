@@ -20,7 +20,8 @@ Pure state layer for the `todo` tool — owns the canonical shape, the reducer, 
 state.ts          — Canonical `TaskState { tasks, nextId }` + `EMPTY_STATE`. Single source of truth.
 state-reducer.ts  — Pure: (state, action, params) → { state, op }. `Op` is a closed tagged union.
 store.ts          — Live state cell + read-only accessors + commit/replace/reset seams.
-replay.ts         — Pure: walk session branch, return fresh `TaskState` (last-writer-wins).
+replay.ts         — Pure: walk session branch, return fresh `TaskState` (last-writer-wins over
+                    `rpiv-todo-state` entries; legacy `todo` toolResult details as fallback).
 invariants.ts     — `VALID_TRANSITIONS` table + `isTransitionValid` predicate.
 task-graph.ts     — `detectCycle` (cycle check before a `blockedBy` mutation lands) + `deriveBlocks`.
 selectors.ts      — Pure derivations of `TaskState` (visible/grouped/counted).
@@ -30,13 +31,15 @@ i18n-bridge.ts    — Locale-aware string lookup (only file in this folder that 
 ## Reducer Output (`Op` closed union)
 `applyTaskMutation(state, action, params) → { state, op }` where `op` is a **closed tagged union** spanning one variant per `TaskAction` plus a terminal `error` kind. The response envelope's `formatContent` is compiler-enforced exhaustive over `Op` — adding an action without extending the envelope fails the build. **Errors are values, never throws**: every failure path returns `{ kind: "error", message }`, never raises.
 
+`changesState(op)` (exhaustive over `Op`) says whether a result changed state — true for `create`/`delete`/`clear` and an `update` with `changed`; false for `list`/`get`/`error`. `todo.ts` persists a replay snapshot exactly when it is true.
+
 The `update` variant carries `changed: boolean`, computed by the pure `taskChanged(before, after)` comparator (order-sensitive on `blockedBy`, JSON-equality on `metadata`) — a no-effect update lets the envelope report `No change` instead of `Updated #N`, so a model does not re-issue the same no-op update in a loop. `update` also merges `metadata` keys: a `null` value deletes the key, an empty record drops `metadata`.
 
 ## Store Mutation Seams (single writer)
 `store.ts` is the **only** module that mutates state. State lives as a `Map<sid, TaskState>` (per-session slots — a detached/child session keyed by a distinct sid cannot read or clobber another's tasks). The write surface is three sid-keyed seams — `commitState` (post-reducer), `replaceState` (replay), `evictSession` (drop a slot on `session_shutdown`) — plus the global `__resetState` (test isolation: takes no sid, clears the whole Map and the render pointer; signature kept stable so `test/setup.ts` needed no edit) and read-only accessors. A separate `activeRenderSession` pointer (`setActiveRenderSession`/`clearActiveRenderSession`) selects which slot the ctx-less readers render; it is NOT a task-state writer. Any other module that wants to change state must go through these seams.
 
 ## Branch Replay + Cycle Guard (pure, last-writer-wins)
-Replay walks the session branch, picks the latest `todo` toolResult whose `details` survive the runtime type guard, and returns a **fresh** `TaskState` (the composer commits via `replaceState`). Stale-schema entries from older sessions are silently skipped — never coerced via defaults, which would drift.
+Replay walks the session branch and returns a **fresh** `TaskState` (the composer commits via `replaceState`) from the latest snapshot that survives the runtime type guard. Two sources carry the same `TaskDetails` shape: `rpiv-todo-state` custom entries (written by `todo.ts` for every state change, including calls made through `ctx.executeTool`, e.g. codemode, which leave no standalone `toolResult`) and `todo` toolResult `details`. Once the branch has any state entry, state entries are authoritative; branches without one (sessions saved before entries existed) replay from toolResults. The entry type is a literal in `replay.ts` (mirrors `STATE_ENTRY_TYPE`, pinned by a test), like the `"todo"` tool name, so `state/` keeps no value import of the Pi-aware tool layer. Stale-schema entries from older sessions are silently skipped — never coerced via defaults, which would drift.
 
 Cycle detection runs **before** a `blockedBy` mutation lands — the reducer never accepts a graph edit and rolls back. Status transitions go through a `Record<TaskStatus, ReadonlySet<TaskStatus>>` table in `invariants.ts`; the mapped type makes the table exhaustive over `TaskStatus` and `deleted` is the only terminal status (tombstone, preserves ids).
 

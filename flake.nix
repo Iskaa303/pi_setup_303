@@ -148,12 +148,17 @@
         };
         ponytail = {
           src = ./vendor/ponytail;
+          version = "5.2.0";
+        };
+        anti-slop = {
+          src = ./vendor/anti-slop;
+          version = "3.2.20";
         };
         pi-subagents = {
           src = ./vendor/pi-subagents;
-          version = "0.77.0";
+          version = "0.78.0";
           lock = ./nix/locks/pi-subagents.json;
-          depsHash = "sha256-u++wEfUDv9SWy6aLojT9JBYx9ZZreNeJWkMXohlcfh8=";
+          depsHash = "sha256-zK+9RByph8U3HqjQvFvGDb7rur0HXwX9+jhjf3alDiE=";
         };
         pi-blackhole = {
           src = ./vendor/pi-blackhole;
@@ -164,15 +169,15 @@
         };
         rpiv-ask-user-question = {
           src = ./vendor/rpiv-mono/packages/rpiv-ask-user-question;
-          version = "2.12.0";
+          version = "2.13.8";
           lock = ./nix/locks/rpiv-ask-user-question.json;
-          depsHash = "sha256-OgWE/UyUczwYEK/IXXGfJw3Iem9KYKS3Qutwhleg1gw=";
+          depsHash = "sha256-A6JKcC+upsm4kismFYrzvXQYMYYQfGM6VMzfihFgfZE=";
         };
         rpiv-todo = {
           src = ./vendor/rpiv-mono/packages/rpiv-todo;
-          version = "2.12.0";
+          version = "2.13.8";
           lock = ./nix/locks/rpiv-todo.json;
-          depsHash = "sha256-f/krzjMcYapfqhRqAWfcLXij7RicX6pn9r+64qvAuNw=";
+          depsHash = "sha256-l12WX9G8jCcwSFR5yxkn032aBKVEApZzArRnYcQ+uOI=";
         };
         pi-notify = {
           src = ./vendor/pi-notify;

@@ -56,6 +56,7 @@ deliberate edit of those two attributes plus `nix build .#pi --refresh`.
 | Package | What it does | License |
 |---|---|---|
 | [ponytail](https://github.com/DietrichGebert/ponytail) | lazy senior dev mode, forces the smallest solution that works | MIT |
+| [anti-slop](https://github.com/miqdadbadjuber/anti-slop) | six skills that filter generic UI, filler copy and AI-shaped code | MIT |
 | [pi-subagents](https://github.com/nicobailon/pi-subagents) | delegate work to focused child agents | MIT |
 | [pi-blackhole](https://github.com/k0valik/pi-blackhole) | algorithmic `/compact` replacement + observational memory | MIT |
 | [@juicesharp/rpiv-ask-user-question](https://github.com/juicesharp/rpiv-mono) | lets the model ask you structured questions instead of guessing | MIT |

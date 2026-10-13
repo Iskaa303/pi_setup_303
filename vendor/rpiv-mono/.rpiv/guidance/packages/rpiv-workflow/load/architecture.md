@@ -24,7 +24,7 @@ legacy.ts            — Legacy-layout advisories: LEGACY_* notice strings + pus
 skill-contract-phase.ts — applySkillContractPhase: provider flush/drain + effective registry + derivers
 shape-guards.ts      — Structural predicates (isWorkflow, isEnvelope) + describe (formatError is ../internal-utils.ts)
 normalize.ts         — FileKind="config"|"pack" + normalizeDefaultExport → tagged NormalizeResult
-cache.ts             — Module-singleton jiti + mtime-keyed overlayCache; __resetLoadCache for tests
+cache.ts             — Lazily-created jiti (overlay module map) + mtime-keyed overlayCache; __resetLoadCache for tests
 merge.ts             — LoadAccumulator + LayerOutcome + loadLayer/loadOverlayFile/mergeOverlay
 resolve-default.ts   — Project default > user default > first registered; stale name → Issue
 alias.ts             — isDispatchingStage + aliasSkills (pure transform) + applySkillAliases (loader-internal)
@@ -72,11 +72,12 @@ Layer banners in issues are conditional: `"built-in"` appears only when built-in
 
 ## mtime-keyed import cache (loader ↔ jiti boundary)
 ```ts
-const jiti = createJiti(import.meta.url, { moduleCache: false });  // module cache off, fs transform cache kept; mtime-keyed overlayCache re-imports on edit
+// created on first overlay import; failed setup resets so the next /wf retries
+getJiti() = createJiti(import.meta.url, { moduleCache: false, virtualModules: await overlayVirtualModules() });
 export async function cachedImport(path: string): Promise<unknown> {
   const cached = overlayCache.get(path), stat = statSync(path);
   if (cached && cached.mtimeMs === stat.mtimeMs) return cached.parsed;  // hit
-  const value = await jiti.import(path, { default: true });             // strip ESM default
+  const value = await (await getJiti()).import(path, { default: true }); // strip ESM default
   overlayCache.set(path, { mtimeMs: stat.mtimeMs, parsed: value }); return value; }
 ```
 
@@ -85,6 +86,7 @@ export async function cachedImport(path: string): Promise<unknown> {
 - **Mutable `LoadAccumulator` threaded through helpers** — new loader features add a field, not a parameter
 - **Pack files cannot set `default` OR declare `skillAliases`** — both envelope-only fields are hard-rejected on packs, eliminating "who set this?" ambiguity across overlapping packs
 - **Internal-only surfaces** — `applySkillAliases` is loader-internal, exported from `alias.ts` for `index.ts` only (the sibling-facing surface is `aliasSkills`, the pure transform); `__resetLoadCache` is test-only via `../internal.ts`, NOT the public barrel
+- **Overlays resolve this package and `typebox` through `virtualModules`, never through disk** — overlays live outside any `node_modules` tree and outside Pi's extension module mapping, so `overlayVirtualModules()` maps `@juicesharp/rpiv-workflow` (`.`, `/registration`, `/startup`, `/runner` — NOT `/internal`) to the running package's entries and `typebox` (`/value`, `/compile`, each fail-soft) to the copy this package received from Pi, mirroring Pi's own loader (#298). Built lazily on first overlay import so the thin startup/registration graph never pulls the runner. Other bare imports still use Node resolution from the overlay's folder
 - **Overlay code is trusted local code** — jiti synchronously evaluates overlay top-level code on first load and on every edit (same trust level as a node script)
 
 <important if="you are adding a new layer source (e.g. workspace overlay)">

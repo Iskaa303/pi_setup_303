@@ -5,6 +5,28 @@ All notable changes to `@juicesharp/rpiv-todo` are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.8] - 2026-10-12
+
+## [2.13.7] - 2026-10-12
+
+## [2.13.6] - 2026-10-12
+
+## [2.13.5] - 2026-10-12
+
+### Fixed
+
+- **Tasks changed from codemode scripts survive resume, reload, tree navigation and compaction.** A `todo` call made through another tool (Pi's codemode, or any `ctx.executeTool` caller) never becomes a standalone tool result on the session branch, so replay could not see it. Tasks created only that way came back empty, and a task completed that way rolled back to its last directly recorded status. Every call that changes the list now also saves its snapshot as a `rpiv-todo-state` custom entry (never sent to the model), and replay restores from the latest one. Sessions saved before this change still replay from tool results. ([#290](https://github.com/juicesharp/rpiv-mono/issues/290))
+
+## [2.13.4] - 2026-10-11
+
+## [2.13.3] - 2026-10-11
+
+## [2.13.2] - 2026-10-11
+
+## [2.13.1] - 2026-10-11
+
+## [2.13.0] - 2026-10-11
+
 ## [2.12.0] - 2026-09-30
 
 ### Fixed

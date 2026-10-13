@@ -6,19 +6,21 @@ attribution. Each copy keeps its upstream `LICENSE` file in place.
 
 | Package | Upstream | Version | Commit | License |
 |---|---|---|---|---|
-| ponytail | https://github.com/DietrichGebert/ponytail | 5.1.0 | `9cc65d03aa2da1db7121b912d03596409ee340b8` | MIT, © 2026 DietrichGebert |
-| pi-subagents | https://github.com/nicobailon/pi-subagents | 0.77.0 | `1ac9b964eb9cda1662507c52f5277764637daccc` | MIT, © 2026 Nico Bailon |
+| ponytail | https://github.com/DietrichGebert/ponytail | 5.2.0 | `2961b52fc1fe6a5a87c7a959a79512e5c2f3ffe5` | MIT, © 2026 DietrichGebert |
+| pi-subagents | https://github.com/nicobailon/pi-subagents | 0.78.0 | `a4c8ced69a8176cdf4179b127feddc8875e3418f` | MIT, © 2026 Nico Bailon |
 | pi-blackhole | https://github.com/k0valik/pi-blackhole | 0.5.12 | `a2e4c136bb0e8775cca0e8b2583f5d24e86776fb` | MIT, © 2026 k0valik |
-| @juicesharp/rpiv-ask-user-question | https://github.com/juicesharp/rpiv-mono (`packages/rpiv-ask-user-question`) | 2.12.0 | `7c9bc924c5bfd148f36d7ebc9f7bd0a9469d633f` | MIT, © 2026 juicesharp |
-| @juicesharp/rpiv-todo | https://github.com/juicesharp/rpiv-mono (`packages/rpiv-todo`) | 2.12.0 | `7c9bc924c5bfd148f36d7ebc9f7bd0a9469d633f` | MIT, © 2026 juicesharp |
-| @juicesharp/rpiv-config | https://github.com/juicesharp/rpiv-mono (`packages/rpiv-config`) | 2.12.0 | `7c9bc924c5bfd148f36d7ebc9f7bd0a9469d633f` | MIT, © 2026 juicesharp |
+| anti-slop | https://github.com/miqdadbadjuber/anti-slop | 3.2.20 | `91f12ec67e9de6043cfd93b846404986ba73c3f4` | MIT, © 2026 Miqdad Badjuber |
+| @juicesharp/rpiv-ask-user-question | https://github.com/juicesharp/rpiv-mono (`packages/rpiv-ask-user-question`) | 2.13.8 | `afc21bc25f7d07cae9fb3103dc309240a16b9f49` | MIT, © 2026 juicesharp |
+| @juicesharp/rpiv-todo | https://github.com/juicesharp/rpiv-mono (`packages/rpiv-todo`) | 2.13.8 | `afc21bc25f7d07cae9fb3103dc309240a16b9f49` | MIT, © 2026 juicesharp |
+| @juicesharp/rpiv-config | https://github.com/juicesharp/rpiv-mono (`packages/rpiv-config`) | 2.13.8 | `afc21bc25f7d07cae9fb3103dc309240a16b9f49` | MIT, © 2026 juicesharp |
 | @narumitw/pi-statusline | https://github.com/narumiruna/pi-extensions (`packages/pi-statusline`) | 0.50.2 | `npm` tarball, sha256 from `nix/locks/pi-statusline.json` | MIT, © 2026 narumiruna |
 | @leo-alvarenga/pi-notify | https://github.com/leo-alvarenga/pi-mono (`npm:@leo-alvarenga/pi-notify`) | 0.2.11 | `npm` tarball, sha256 from `nix/locks/pi-notify.json` | MIT, © 2026 Leonardo A. Alvarenga |
 | @ff-labs/pi-fff | https://github.com/dmtrKovalenko/fff (`packages/pi-fff`) | 0.11.0 | `npm` tarball, sha256 from `nix/locks/pi-fff.json` | MIT, © 2026 ff-labs |
 
 My own extensions (`extensions/ketch-web-access`, `extensions/decider`,
-`extensions/attention-notify`, `extensions/tui`) are written here. Runtime
-dependencies they reach for are not vendored:
+`extensions/attention-notify`, `extensions/tui`, `extensions/rea-mcp`,
+`extensions/playwright-mcp`) are written here. Runtime dependencies they reach
+for are not vendored:
 
 | Project | Used for | License |
 |---|---|---|

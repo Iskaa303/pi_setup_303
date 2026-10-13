@@ -24,6 +24,14 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
+# File-size ratchet guard — fail-fast before the slower biome + tsc pass.
+echo "Checking file-size ratchet..."
+npm run check:file-sizes
+if [ $? -ne 0 ]; then
+  echo "❌ File-size ratchet violated — split the file, or bump the baseline deliberately (see scripts/check-file-sizes.mjs)."
+  exit 1
+fi
+
 echo "Running formatting, linting, and type checking..."
 npm run check
 if [ $? -ne 0 ]; then

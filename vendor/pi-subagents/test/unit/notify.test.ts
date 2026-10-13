@@ -23,6 +23,9 @@ import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_FOREGROUND_COMPLETE_EVENT } fro
 import { createResultDeliveryOwnership } from "../../src/runs/background/result-delivery-ownership.ts";
 import { createParentWake } from "../../src/shared/parent-wake.ts";
 import { finalizeSingleOutput } from "../../src/runs/shared/single-output.ts";
+import { formatPartialOutput, timedOutRunSummary } from "../../src/runs/shared/partial-output.ts";
+import { buildTimeoutRecoverySummary } from "../../src/runs/shared/mutation-evidence.ts";
+import { formatOutputArtifactContent } from "../../src/shared/artifacts.ts";
 
 const COMPLETION_OWNER_ID = "completion-owner-a";
 const completionContent = (content: string) => `${content}\n\nParent action: Read the saved results above and resume the already-authorized parent task, or report completion. If approval is required, explicitly ask the user. Do not silently yield, rerun completed work, or infer new authorization.`;
@@ -35,6 +38,7 @@ it("keeps reload wakes scoped to one session manager and clears them on quit", a
 		const messages: any[] = [];
 		const pi = {
 			events: createEventBus(),
+			isHeld: () => false,
 			sendMessage(message: unknown) { messages.push(message); },
 		} as unknown as Parameters<typeof registerSubagentNotify>[0];
 		const notifier = registerSubagentNotify(pi, { currentSessionId: sessionId, completionOwnerId: COMPLETION_OWNER_ID }, { batchConfig: { enabled: false } });
@@ -75,6 +79,7 @@ it("keeps wakes accepted before the first session bind", async () => {
 	const messages: any[] = [];
 	const pi = {
 		events: createEventBus(),
+		isHeld: () => false,
 		sendMessage(message: unknown) { messages.push(message); },
 	} as unknown as Parameters<typeof registerSubagentNotify>[0];
 	const first = registerSubagentNotify(pi, { currentSessionId: sessionId, completionOwnerId: COMPLETION_OWNER_ID }, { batchConfig: { enabled: false } });
@@ -99,7 +104,7 @@ it("does not wait for message_start on a completion appended to an idle parent",
 		sendUserMessage: (...args: unknown[]) => { calls.push(args); },
 	} as never);
 	parentWake.bindSession({ isIdle: () => true, sessionManager: owner } as never);
-	const notifier = registerSubagentNotify({ events: createEventBus(), sendMessage: parentWake.sendMessage }, { currentSessionId: sessionId, completionOwnerId: COMPLETION_OWNER_ID }, { batchConfig: { enabled: false } });
+	const notifier = registerSubagentNotify({ events: createEventBus(), sendMessage: parentWake.sendMessage, isHeld: parentWake.isHeld }, { currentSessionId: sessionId, completionOwnerId: COMPLETION_OWNER_ID }, { batchConfig: { enabled: false } });
 	notifier.bindSession(owner);
 	await notifier.deliver({ id: "idle-wake-result", sessionId, completionOwnerId: COMPLETION_OWNER_ID, success: false, summary: "Needs attention" });
 	assert.deepEqual(calls.map((call) => call[1]), [{ triggerTurn: false }, { deliverAs: "steer" }]);
@@ -175,7 +180,7 @@ function createPi(currentSessionId = "session-1", registerOptions: RegisterSubag
 	const events = createEventBus();
 	const sent: Array<{ message: unknown; options: unknown }> = [];
 	const pi = {
-		events,
+		events, isHeld: () => false,
 		sendMessage(message: unknown, options: unknown) {
 			sent.push({ message, options });
 		},
@@ -196,7 +201,7 @@ function createBatchingPi(clock: ReturnType<typeof createFakeClock>, currentSess
 	const events = createEventBus();
 	const sent: Array<{ message: unknown; options: unknown }> = [];
 	const pi = {
-		events,
+		events, isHeld: () => false,
 		sendMessage(message: unknown, options: unknown) {
 			sent.push({ message, options });
 		},
@@ -264,7 +269,7 @@ describe("registerSubagentNotify", () => {
 		const events = createEventBus();
 		const sent: Array<{ options: unknown }> = [];
 		const registry = createCompletionSendRegistry();
-		const pi = { events, sendMessage(_message: unknown, options: unknown) { sent.push({ options }); } };
+		const pi = { events, isHeld: () => false, sendMessage(_message: unknown, options: unknown) { sent.push({ options }); } };
 		const state = { currentSessionId: "session-a", completionOwnerId: COMPLETION_OWNER_ID };
 		const options = { batchConfig: { enabled: false }, sendRegistry: registry } as const;
 		const first = registerSubagentNotify(pi as never, state, options);
@@ -283,7 +288,7 @@ describe("registerSubagentNotify", () => {
 		const events = createEventBus();
 		const sent: unknown[] = [];
 		const registry = createCompletionSendRegistry();
-		const pi = { events, sendMessage(message: unknown) { sent.push(message); } };
+		const pi = { events, isHeld: () => false, sendMessage(message: unknown) { sent.push(message); } };
 		const state = { currentSessionId: "session-a", completionOwnerId: COMPLETION_OWNER_ID };
 		const options = { batchConfig: { enabled: false }, sendRegistry: registry } as const;
 		const first = registerSubagentNotify(pi as never, state, options);
@@ -302,7 +307,7 @@ describe("registerSubagentNotify", () => {
 		const registry = createCompletionSendRegistry();
 		let attempts = 0;
 		let accepted = 0;
-		const pi = { events, sendMessage() {
+		const pi = { events, isHeld: () => false, sendMessage() {
 			attempts += 1;
 			if (attempts === 1) throw new Error("runtime inactive");
 			accepted += 1;
@@ -327,7 +332,7 @@ describe("registerSubagentNotify", () => {
 		let reentrant: Promise<boolean> | undefined;
 		let sends = 0;
 		let second!: ReturnType<typeof registerSubagentNotify>;
-		const pi = { events: createEventBus(), sendMessage() {
+		const pi = { events: createEventBus(), isHeld: () => false, sendMessage() {
 			sends += 1;
 			reentrant = second.deliver(result);
 		} };
@@ -348,7 +353,7 @@ describe("registerSubagentNotify", () => {
 	it("keeps identical completion ids isolated by session", async () => {
 		const registry = createCompletionSendRegistry();
 		const sent: unknown[] = [];
-		const pi = { events: createEventBus(), sendMessage(message: unknown) { sent.push(message); } };
+		const pi = { events: createEventBus(), isHeld: () => false, sendMessage(message: unknown) { sent.push(message); } };
 		const options = { batchConfig: { enabled: false }, sendRegistry: registry } as const;
 		const first = registerSubagentNotify(pi as never, { currentSessionId: "session-a", completionOwnerId: COMPLETION_OWNER_ID }, options);
 		const second = registerSubagentNotify(pi as never, { currentSessionId: "session-b", completionOwnerId: COMPLETION_OWNER_ID }, options);
@@ -460,7 +465,7 @@ describe("registerSubagentNotify", () => {
 	it("accepts only explicitly claimed predecessor-session completions", async () => {
 		const events = createEventBus();
 		const sent: unknown[] = [];
-		const pi = { events, sendMessage(message: unknown) { sent.push(message); } };
+		const pi = { events, isHeld: () => false, sendMessage(message: unknown) { sent.push(message); } };
 		const state = { currentSessionId: "session-old" as string | null, completionOwnerId: COMPLETION_OWNER_ID };
 		const ownership = createResultDeliveryOwnership(state);
 		assert.equal(ownership.claimPredecessor("session-old", "session-old"), true);
@@ -480,7 +485,7 @@ describe("registerSubagentNotify", () => {
 		const clock = createFakeClock();
 		const events = createEventBus();
 		const sent: unknown[] = [];
-		const pi = { events, sendMessage(message: unknown) { sent.push(message); } };
+		const pi = { events, isHeld: () => false, sendMessage(message: unknown) { sent.push(message); } };
 		const state = { currentSessionId: "session-a" as string | null, completionOwnerId: COMPLETION_OWNER_ID };
 		const notifier = registerSubagentNotify(pi as never, state, {
 			batchConfig: { enabled: true, debounceMs: 150, maxWaitMs: 1000, stragglerDebounceMs: 75, stragglerMaxWaitMs: 400, stragglerWindowMs: 2000 },
@@ -1116,7 +1121,7 @@ describe("completion formatting helpers", () => {
 	});
 
 	it("reports false when Pi rejects sendMessage synchronously", async () => {
-		const pi = { events: createEventBus(), sendMessage() { throw new Error("runtime inactive"); } };
+		const pi = { events: createEventBus(), isHeld: () => false, sendMessage() { throw new Error("runtime inactive"); } };
 		const notifier = registerSubagentNotify(pi as never, { currentSessionId: "session-a" }, { batchConfig: { enabled: false } });
 		assert.equal(await notifier.deliver(completionResult({ id: "direct-rejected" })), false);
 		notifier.dispose();
@@ -1380,6 +1385,38 @@ describe("completion notice output size", () => {
 			assert.match(short, /worker:\nshort output/);
 			assert.doesNotMatch(short, /Full output:/);
 			assert.ok(notice(output, join(root, "missing.md")).includes(output), "without a full-output file the output stays inline");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("shows a timed-out child's capped partial output, its file and its recovery summary instead of only the timeout line", () => {
+		const root = mkdtempSync(join(tmpdir(), "notify-output-timeout-"));
+		try {
+			const artifact = join(root, "worker_output.md");
+			const partial = formatPartialOutput(longOutput("partial"), "timeout");
+			const timeout = "Subagent timed out after 300000ms.";
+			// As the runner does: the artifact holds the partial text, and the published output adds the recovery summary.
+			writeFileSync(artifact, formatOutputArtifactContent({ output: partial, error: timeout }));
+			const recovery = buildTimeoutRecoverySummary({
+				termination: "timed-out",
+				evidence: { source: "tracked-files", trackedOnly: true, changedFiles: [], attemptedMutation: false },
+				artifactPaths: { inputPath: join(root, "worker_input.md"), outputPath: artifact, jsonlPath: join(root, "worker.jsonl"), transcriptPath: join(root, "worker_transcript.md"), metadataPath: join(root, "worker_meta.json") },
+			}).message;
+			const output = `${partial}\n\n${recovery}`;
+			const result = { agent: "worker", success: false, timedOut: true, outputPartial: true, output, error: timeout, artifactPaths: { outputPath: artifact } };
+			const content = formatSingleCompletion(buildCompletionDetails({
+				agent: "worker", success: false, timedOut: true, error: timeout,
+				summary: timedOutRunSummary(timeout, `worker:\n${output}`, [result]),
+				results: [result],
+			}));
+			assert.match(content, /Subagent timed out after 300000ms\.\n\nworker:\nPartial output before timeout:\npartial line 0 /);
+			assert.ok(!content.includes("partial line 199"));
+			assert.match(content, /\nFull output: .*worker_output\.md \(\d+\.\d KB, 201 lines\)\. Read it if needed\.\n\nRecovery summary:\n- termination: timed-out\n/);
+			assert.ok(content.includes(recovery), "the recovery summary is not in the file, so it stays inline");
+			assert.ok(content.length < 3_500);
+			assert.equal(content.split(timeout).length, 2, "the timeout line is not repeated as an Error line");
+			assert.equal(timedOutRunSummary(timeout, `worker:\n${timeout}`, [{ outputPartial: undefined }]), timeout);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

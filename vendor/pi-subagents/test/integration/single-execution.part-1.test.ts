@@ -325,12 +325,13 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.notEqual(mockPi.sessions[0]!.launch.parentProviderRegistry, mockPi.sessions[1]!.launch.parentProviderRegistry);
 	});
 
-	it("keeps public structured children alive when tool results backfill without execution_end", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("keeps public structured children alive after a tool call completes", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({
 			steps: [
 				{ jsonl: [{ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "echo PROBE_OK" } }] },
 				{ delay: 25, jsonl: [
-					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: false, content: [{ type: "text", text: "PROBE_OK" }] } },
+					{ type: "tool_execution_end", toolCallId: "bash-1", toolName: "bash", isError: false },
+					{ type: "message_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: false, content: [{ type: "text", text: "PROBE_OK" }] } },
 					events.assistantMessage("PROBE_OK"),
 				] },
 			],
@@ -351,15 +352,24 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.details.results[0]?.timedOut, undefined);
 	});
 
-	it("preserves a blocked foreground delegated tool attempt without an execution-start event", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("reports a blocked foreground delegated tool call from Pi's tool result message", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const blockedMessage = "Tool budget hard limit reached after 1 tool call (hard 0). The 'bash' tool is blocked so you can finalize from the context you already have.";
 		mockPi.onCall({
 			steps: [
 				{ jsonl: [
-					// A still-pending earlier call must not be attributed as the blocked tool.
+					// Pi's sequence for a call blocked by a tool_call handler: start, end with isError, then the toolResult message.
+					{ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "cat canary" } },
+					// A later overlapping call must not be attributed as the blocked tool.
 					{ type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "notes.md" } },
-					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: true, content: [{ type: "text", text: blockedMessage }] } },
-					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "read-1", toolName: "read", isError: false, content: [{ type: "text", text: "ordinary notes" }] } },
+					{ type: "tool_execution_end", toolCallId: "bash-1", toolName: "bash", isError: true },
+					{ type: "message_start", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: true, content: [{ type: "text", text: blockedMessage }] } },
+					{ type: "message_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: true, content: [{ type: "text", text: blockedMessage }] } },
+					{ type: "tool_execution_end", toolCallId: "read-1", toolName: "read", isError: false },
+					{ type: "message_end", message: { role: "toolResult", toolCallId: "read-1", toolName: "read", isError: false, content: [{ type: "text", text: "ordinary notes" }] } },
+					// A call that starts after the block keeps the recorded block in the budget state.
+					{ type: "tool_execution_start", toolCallId: "ls-1", toolName: "ls", args: {} },
+					{ type: "tool_execution_end", toolCallId: "ls-1", toolName: "ls", isError: false },
+					{ type: "message_end", message: { role: "toolResult", toolCallId: "ls-1", toolName: "ls", isError: false, content: [{ type: "text", text: "notes.md" }] } },
 				] },
 				{ jsonl: [events.assistantMessage("I could not read the required canary because bash was blocked.")] },
 			],
@@ -388,6 +398,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.isError, undefined, result.content[0]?.text ?? "delegated execution failed");
 		assert.equal(child?.toolBudgetBlocked, true);
 		assert.equal(child?.toolBudget?.blockedTool, "bash");
+		assert.equal(child?.toolBudget?.outcome, "hard-blocked");
 		assert.equal(child?.finalOutput, "I could not read the required canary because bash was blocked.");
 
 		mockPi.onCall({ output: "No tool needed." });
@@ -408,8 +419,8 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 			steps: [
 				{ jsonl: [
 					{ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "grep -rn 'Tool budget hard limit reached' src/" } },
-					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: false, content: [{ type: "text", text: quoted }] } },
 					{ type: "tool_execution_end", toolName: "bash" },
+					{ type: "message_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: false, content: [{ type: "text", text: quoted }] } },
 				] },
 				{ jsonl: [events.assistantMessage("The phrase appears in a log; nothing was blocked.")] },
 			],
@@ -498,8 +509,8 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		mockPi.onCall({
 			stdoutRaw: [
 				{ type: "tool_execution_start", toolName: "structured_output", args: { value: { ok: true } } },
-				{ type: "tool_result_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 				{ type: "tool_execution_end", toolName: "structured_output" },
+				{ type: "message_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 			].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
 			structuredOutputCapture: { ok: true },
 		});
@@ -530,6 +541,36 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(child?.outputMode, "file-only");
 		assert.deepEqual(child?.structuredOutput, { ok: true });
 		assert.deepEqual(JSON.parse(fs.readFileSync(configuredPath, "utf-8")), { ok: true });
+	});
+
+	it("fails foreground settlement when required file-only output cannot be written", { skip: !runSync ? "execution not importable" : undefined }, async () => {
+		const blockedParent = path.join(tempDir, `blocked-fg-parent-${Date.now().toString(36)}`);
+		fs.writeFileSync(blockedParent, "regular file collision", "utf-8");
+		const outputPath = path.join(blockedParent, "report.md");
+		try {
+			mockPi.onCall({ output: "review findings text" });
+			const agents = makeAgentConfigs(["echo"]);
+			const updates: Array<{ details?: { progress?: Array<{ status?: string; error?: string }> } }> = [];
+			const result = await runSync(tempDir, agents, "echo", "Write report", {
+				outputPath,
+				outputMode: "file-only",
+				onUpdate: (update) => {
+					updates.push(update as { details?: { progress?: Array<{ status?: string; error?: string }> } });
+				},
+			});
+
+			assert.equal(result.exitCode, 1);
+			assert.equal(result.savedOutputPath, undefined);
+			assert.match(result.error ?? "", /EEXIST|EISDIR|ENOTDIR|EPERM|EACCES|file already exists|not a directory|permission denied/i);
+			assert.equal(result.progress?.status, "failed");
+			assert.match(result.progress?.error ?? "", /EEXIST|EISDIR|ENOTDIR|EPERM|EACCES|file already exists|not a directory|permission denied/i);
+			const lastUpdate = updates[updates.length - 1];
+			assert.equal(lastUpdate?.details?.progress?.[0]?.status, "failed");
+			assert.match(lastUpdate?.details?.progress?.[0]?.error ?? "", /EEXIST|EISDIR|ENOTDIR|EPERM|EACCES|file already exists|not a directory|permission denied/i);
+			assert.equal(fs.existsSync(outputPath), false);
+		} finally {
+			fs.rmSync(blockedParent, { recursive: true, force: true });
+		}
 	});
 
 	it("matches preflight launch digest for structured foreground execution with a project-local refinement", { skip: !runSync ? "execution not importable" : undefined }, async () => {
@@ -632,8 +673,8 @@ When the task asks for a structured result, keep field names exactly as requeste
 		const structuredCall = {
 			stdoutRaw: [
 				{ type: "tool_execution_start", toolName: "structured_output", args: { value: { ok: true } } },
-				{ type: "tool_result_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 				{ type: "tool_execution_end", toolName: "structured_output" },
+				{ type: "message_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 			].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
 			structuredOutputCapture: { ok: true },
 		};
@@ -3849,41 +3890,6 @@ Answer only from the supplied synthetic text.
 		assert.equal(fs.existsSync(path.join(tempDir, "context.md")), false);
 	});
 
-	it("isolates inherited outputs that collide with a resumed child output", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		const retainedRunId = `retained-output-${Date.now()}`;
-		const retainedOutputPath = path.join(tempDir, "context.md");
-		const cleanupRetainedRun = writeRetainedEchoRun(retainedRunId, { outputPath: retainedOutputPath, state: "failed", steps: 2 });
-		mockPi.onCall({ output: "resumed report", matchArgIncludes: "Resume" });
-		mockPi.onCall({ output: "review report", matchArgIncludes: "Review" });
-
-		try {
-			const result = await makeExecutor([makeAgent("echo", { output: "context.md" })]).execute(
-				"scripted-workflow-resumed-inherited-output-collision",
-				{
-					async: false,
-					workflowScript: `return await runs.all([
-						{ key: "resume", resume: ${JSON.stringify(retainedRunId)}, index: 1, task: "Resume" },
-						{ key: "review", agent: "echo", task: "Review" }
-					]);`,
-				},
-				new AbortController().signal,
-				undefined,
-				makeMinimalCtx(tempDir),
-			);
-
-			assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
-			const children = result.details.workflow?.value as Array<{ ok: boolean }>;
-			assert.deepEqual(children.map(({ ok }) => ok), [true, true]);
-			assert.equal(fs.readFileSync(retainedOutputPath, "utf-8"), "resumed report");
-			const outputPaths = result.details.results.map(({ savedOutputPath }) => savedOutputPath ?? "");
-			const inheritedOutputPaths = outputPaths.filter((outputPath) => outputPath && outputPath !== retainedOutputPath).sort();
-			assert.deepEqual(inheritedOutputPaths.map((outputPath) => path.basename(outputPath)), ["context.md"]);
-			assert.ok(inheritedOutputPaths.every((outputPath) => pathContainsSegments(outputPath, "artifacts", "outputs")));
-		} finally {
-			cleanupRetainedRun();
-		}
-	});
-
 	it("reroutes a later inherited agent-default output collision", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "first report", matchArgIncludes: "First" });
 		mockPi.onCall({ output: "second report", matchArgIncludes: "Second" });
@@ -3944,7 +3950,7 @@ Answer only from the supplied synthetic text.
 		assert.equal(fs.readFileSync(deslopPath, "utf-8"), "deslop report");
 	});
 
-	it("reroutes a later output-less resume of a stage that reused an outside run's report path", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("gives an output-less resume of an outside run its own report path instead of overwriting that run's report", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const outsidePath = path.join(tempDir, "outside.md");
 		const executor = makeExecutor([makeAgent("echo")]);
 		const ctx = makeMinimalCtx(tempDir);
@@ -3971,10 +3977,38 @@ Answer only from the supplied synthetic text.
 		);
 
 		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
-		assert.equal(fs.readFileSync(outsidePath, "utf-8"), "apply report");
+		assert.equal(fs.readFileSync(outsidePath, "utf-8"), "outside report");
+		const applyPath = result.details.results[0]?.savedOutputPath ?? "";
+		assert.equal(path.basename(applyPath), "apply.md");
+		assert.equal(fs.readFileSync(applyPath, "utf-8"), "apply report");
 		const deslopPath = result.details.results[1]?.savedOutputPath ?? "";
 		assert.equal(path.basename(deslopPath), "deslop.md");
 		assert.equal(fs.readFileSync(deslopPath, "utf-8"), "deslop report");
+	});
+
+	it("keeps an outside run's report when the resuming workflow's default output names the same file", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const outsidePath = path.join(tempDir, "report.apply.md");
+		const executor = makeExecutor([makeAgent("echo")]);
+		const ctx = makeMinimalCtx(tempDir);
+		mockPi.onCall({ output: "outside report" });
+		const outside = await executor.execute(
+			"outside-same-default",
+			{ async: false, workflowScript: `return runs.run("outside", { agent: "echo", task: "Outside", acceptance: false, output: ${JSON.stringify(outsidePath)} });` },
+			new AbortController().signal, undefined, ctx,
+		);
+		const outsideRunId = (outside.details.workflow?.value as { runId: string }).runId;
+		mockPi.onCall({ output: "apply report" });
+		const result = await executor.execute(
+			"scripted-workflow-resume-same-default",
+			{ async: false, output: path.join(tempDir, "report.md"), workflowScript: `return runs.run("apply", { resume: ${JSON.stringify(outsideRunId)}, task: "Apply" });` },
+			new AbortController().signal, undefined, ctx,
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
+		assert.equal(fs.readFileSync(outsidePath, "utf-8"), "outside report");
+		const applyPath = result.details.results[0]?.savedOutputPath ?? "";
+		assert.notEqual(applyPath, outsidePath);
+		assert.equal(fs.readFileSync(applyPath, "utf-8"), "apply report");
 	});
 
 	it("gives an output-less retained resume its own default output when an earlier stage owns its report path", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

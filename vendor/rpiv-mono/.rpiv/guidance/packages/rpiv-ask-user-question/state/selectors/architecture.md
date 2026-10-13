@@ -10,7 +10,9 @@ All exports are pure. Projection selectors are `(state, ctx) => P` (`GlobalSelec
 ```
 contract.ts     — Type-only: BindingContext, PerTabBindingContext, GlobalSelector<P>, PerTabSelector<P>
 focus.ts        — Single discriminant: selectActiveView
-derivations.ts  — Small reusable computations: selectConfirmedIndicator, selectActivePreviewPaneIndex
+derivations.ts  — Small reusable computations: selectConfirmedIndicator, selectActivePreviewPaneIndex,
+                  selectSavedNote (a tab's committed note: `notesByTab` side-band ?? `answer.notes`, empty = none —
+                  same precedence as the reducer's `notesValueFor`; read by the question-tab note row and `hasNote`)
 projections.ts  — Per-component prop selectors: selectMultiSelectProps, selectOptionListProps,
                    selectSubmitPickerProps, selectPreviewPaneProps, selectTabBarProps, selectDialogProps
 ```

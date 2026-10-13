@@ -69,7 +69,7 @@ import { formatChildToolDiagnostic } from "../shared/tool-availability.ts";
 import { formatChildModelResolutionDiagnostic, formatInheritedProviderDiagnostic, isChildModelResolutionFailure } from "../shared/model-resolution-diagnostic.ts";
 import { planAbortRecovery } from "../shared/abort-recovery.ts";
 import { buildTimeoutRecoverySummary, collectTrackedMutationEvidence, snapshotTrackedMutations } from "../shared/mutation-evidence.ts";
-import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, hasSingleOutputChangedSinceSnapshot, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
+import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, hasSingleOutputChangedSinceSnapshot, isSettlementFatalOutputError, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	formatSubagentModelVerificationError,
 	isContextOverflow,
@@ -794,7 +794,11 @@ async function runSingleAttempt(
 		};
 
 		let activeLongRunningNotified = false;
-		let pendingToolResult: { tool: string; path?: string; mutates: boolean; startedAt?: number } | undefined;
+		type PendingToolResult = { tool: string; path?: string; mutates: boolean; startedAt?: number };
+		// Pi's parallel tool execution emits every tool_execution_start before the first result message,
+		// so results are matched to their call by toolCallId; the last-started slot covers events without one.
+		const pendingToolResultsByCallId = new Map<string, PendingToolResult>();
+		let pendingToolResult: PendingToolResult | undefined;
 		type ActiveToolCall = { attentionEmitted?: boolean; key: string; tool: string; args: string; startedAt: number; path?: string };
 		let activeToolSequence = 0;
 		const activeToolCalls = new Map<string, ActiveToolCall>();
@@ -1059,10 +1063,11 @@ async function runSingleAttempt(
 				}
 				progress.toolCount++;
 				if (options.toolBudget) {
-					result.toolBudget = toolBudgetState(options.toolBudget, progress.toolCount);
+					result.toolBudget = toolBudgetState(options.toolBudget, progress.toolCount, result.toolBudget?.blockedTool);
 				}
 				const mutates = isMutatingTool(evt.toolName, toolArgs, agent.mutationTools);
 				pendingToolResult = { tool: evt.toolName ?? "tool", path: activeTool?.path, mutates, startedAt: now };
+				if (typeof evt.toolCallId === "string" && evt.toolCallId) pendingToolResultsByCallId.set(evt.toolCallId, pendingToolResult);
 				fireUpdate();
 			}
 
@@ -1138,63 +1143,49 @@ async function runSingleAttempt(
 						applyChildLifecycle(projectChildLifecycle(evt, true, childLifecycleState));
 					}
 				}
-				updateActivityState(now);
-				fireUpdate();
-			}
-
-			if (evt.type === "tool_result_end" && evt.message) {
-				const toolResultCompletion = {
-					toolCallId: (evt.message as { toolCallId?: unknown }).toolCallId ?? (evt as { toolCallId?: unknown }).toolCallId,
-					toolName: (evt.message as { toolName?: unknown }).toolName ?? (evt as { toolName?: unknown }).toolName,
-				};
-				clearActiveToolTimeout(toolResultCompletion);
-				const endedTool = removeActiveToolCall(toolResultCompletion);
-				if (endedTool) {
-					progress.recentTools.push({
-						tool: endedTool.tool,
-						args: endedTool.args,
-						endMs: now,
-					});
-					refreshCurrentTool();
-				}
-				result.messages!.push(evt.message);
-				const resultText = extractTextFromContent(evt.message.content);
-				// The result event's own tool name is authoritative; the single pending slot can
-				// describe a different, overlapping call and serves only as a fallback.
-				const blockedTool = (typeof toolResultCompletion.toolName === "string" && toolResultCompletion.toolName.length > 0
-					? toolResultCompletion.toolName
-					: undefined) ?? pendingToolResult?.tool;
-				if (options.toolBudget && isToolBudgetBlockedMessage(options.toolBudget, resultText, blockedTool)) {
-					result.toolBudgetBlocked = true;
-					result.toolBudget = toolBudgetState(
-						options.toolBudget,
-						Math.max(progress.toolCount, options.toolBudget.hard + 1),
-						blockedTool,
-					);
-				}
-				appendRecentOutput(progress, resultText.split("\n").slice(-10));
-				const toolSnapshot = pendingToolResult;
-				pendingToolResult = undefined;
-				if (toolSnapshot?.mutates && didMutatingToolFail(resultText)) {
-					recordMutatingFailure(mutatingFailures, {
-						tool: toolSnapshot.tool,
-						path: toolSnapshot.path,
-						error: resultText.split("\n").find((line) => line.trim())?.trim().slice(0, 180) ?? "mutating tool failed",
-						ts: now,
-					}, mutatingFailureWindowMs);
-					if (shouldEscalateMutatingFailures(mutatingFailures, controlConfig.failedToolAttemptsBeforeAttention)) {
-						emitNeedsAttention(now, {
-							message: `${agent.name} needs attention after repeated mutating tool failures`,
-							reason: "tool_failures",
-							currentTool: toolSnapshot.tool,
-							currentPath: toolSnapshot.path,
-							currentToolDurationMs: toolSnapshot.startedAt ? Math.max(0, now - toolSnapshot.startedAt) : undefined,
-							recentFailureSummary: summarizeRecentMutatingFailures(mutatingFailures),
-						});
+				// Pi delivers every tool result, including a call blocked by a tool_call handler, as a
+				// toolResult message after tool_execution_end; it emits no separate result event.
+				if (evt.message.role === "toolResult") {
+					const resultText = extractTextFromContent(evt.message.content);
+					const resultCallId = (evt.message as { toolCallId?: unknown }).toolCallId;
+					const keyedSnapshot = typeof resultCallId === "string" ? pendingToolResultsByCallId.get(resultCallId) : undefined;
+					if (keyedSnapshot) pendingToolResultsByCallId.delete(resultCallId as string);
+					const toolSnapshot = keyedSnapshot ?? pendingToolResult;
+					if (!keyedSnapshot || pendingToolResult === keyedSnapshot) pendingToolResult = undefined;
+					// The result message's own tool name is authoritative; the pending snapshot is only a fallback.
+					const resultToolName = (evt.message as { toolName?: unknown }).toolName;
+					const blockedTool = (typeof resultToolName === "string" && resultToolName.length > 0 ? resultToolName : undefined) ?? toolSnapshot?.tool;
+					if (options.toolBudget && isToolBudgetBlockedMessage(options.toolBudget, resultText, blockedTool)) {
+						result.toolBudgetBlocked = true;
+						result.toolBudget = toolBudgetState(
+							options.toolBudget,
+							Math.max(progress.toolCount, options.toolBudget.hard + 1),
+							blockedTool,
+						);
 					}
-				} else if (toolSnapshot?.mutates) {
-					resetMutatingFailureState(mutatingFailures);
+					appendRecentOutput(progress, resultText.split("\n").slice(-10));
+					if (toolSnapshot?.mutates && didMutatingToolFail(resultText)) {
+						recordMutatingFailure(mutatingFailures, {
+							tool: toolSnapshot.tool,
+							path: toolSnapshot.path,
+							error: resultText.split("\n").find((line) => line.trim())?.trim().slice(0, 180) ?? "mutating tool failed",
+							ts: now,
+						}, mutatingFailureWindowMs);
+						if (shouldEscalateMutatingFailures(mutatingFailures, controlConfig.failedToolAttemptsBeforeAttention)) {
+							emitNeedsAttention(now, {
+								message: `${agent.name} needs attention after repeated mutating tool failures`,
+								reason: "tool_failures",
+								currentTool: toolSnapshot.tool,
+								currentPath: toolSnapshot.path,
+								currentToolDurationMs: toolSnapshot.startedAt ? Math.max(0, now - toolSnapshot.startedAt) : undefined,
+								recentFailureSummary: summarizeRecentMutatingFailures(mutatingFailures),
+							});
+						}
+					} else if (toolSnapshot?.mutates) {
+						resetMutatingFailureState(mutatingFailures);
+					}
 				}
+				updateActivityState(now);
 				fireUpdate();
 			}
 		};
@@ -1597,9 +1588,11 @@ async function runSingleAttempt(
 			fullOutput = stripAcceptanceReport(resolvedOutput.fullOutput);
 			result.savedOutputPath = resolvedOutput.savedPath;
 			result.outputSaveError = resolvedOutput.saveError;
-			if (resolvedOutput.fatalError) {
+			if (isSettlementFatalOutputError(resolvedOutput, options.outputMode)) {
 				result.exitCode = 1;
 				result.error = result.error ? `${result.error}\n${resolvedOutput.saveError}` : resolvedOutput.saveError;
+				progress.status = "failed";
+				progress.error = result.error;
 			}
 			if (resolvedOutput.savedPath) {
 				result.outputReference = formatSavedOutputReference(resolvedOutput.savedPath, fullOutput);
@@ -1791,7 +1784,7 @@ async function runSyncCompletionInner(
 			error: "Skills not found: pi-subagents",
 		}, options.context));
 	}
-	const systemPrompt = buildEffectiveSystemPrompt({ agent, resolvedSkills, cwd: skillCwd, ...(options.outputPath ? { outputPath: options.outputPath } : {}) });
+	const systemPrompt = buildEffectiveSystemPrompt({ agent, resolvedSkills, cwd: skillCwd });
 
 	const { model: selectedModel, requestedModel } = resolveModelSelection(
 		options.modelOverride ?? agent.model,

@@ -12,7 +12,7 @@ Claude-Code-parity task management for Pi. Registers a single multiplexed `todo`
 - **`@earendil-works/pi-tui`** (peer): width-safe text helpers, render primitives
 - **`@juicesharp/rpiv-i18n`** (peer, `"*"`, optional): locale lookups via `state/i18n-bridge.ts`
 - **`@juicesharp/rpiv-config`** (dependency): `loadJsonConfigWithLegacyFallback`/`validateGuidanceFields` — XDG-path load with one-way legacy fallback; `config.ts` owns `TodoConfig` (prompt overrides + overlay settings `maxWidgetLines`/`collapseKey`, `config.ts:4-15`) and the collapse-key grammar validator
-- **`typebox`** (dependency — moved from peers so installers that don't materialise peer deps still resolve it): tool parameter schema
+- **`typebox`** (`peerDependencies: "*"`, host-provided): tool parameter schema. Pi supplies and aliases it at load time; never a `dependencies` entry (v2.12.0, #282)
 
 ## Consumers
 - **Pi extension host** (loads via `pi.extensions: ["./index.ts"]`) and **`rpiv-pi`** (lists in `peerDependencies` and `siblings.ts`)
@@ -55,7 +55,8 @@ export function getState(sessionId), getTodos(sessionId), getNextId(sessionId); 
 // getRenderState() = slotFor(activeRenderSession); setActiveRenderSession(id) claimed once by
 // first UI start; getActiveRenderSession() read by the index.ts sid-gate; clearActiveRenderSession() on teardown.
 
-// state/replay.ts — pure: walk branch, return fresh TaskState (last-writer-wins).
+// state/replay.ts — pure: walk branch, return fresh TaskState (last-writer-wins). Last
+// `rpiv-todo-state` custom entry wins; branches without one fall back to `todo` toolResult details.
 export function replayFromBranch(ctx): TaskState;
 ```
 
@@ -88,9 +89,9 @@ pi.on("session_start", async (_e, ctx) => {
 ## Architectural Boundaries
 - **Status transitions are a single declarative table** — `Record<TaskStatus, ReadonlySet<TaskStatus>>` in `state/invariants.ts`, never an `if/switch` ladder; adding a status is a one-line edit and mistakes surface as data
 - **NO replay from `tool_execution_end`** — `message_end` runs after, so the branch is stale; the widget reads live state via `getRenderState()` (the ctx-less foreground slot — `import { getRenderState } from "./state/store.js"`) instead
-- **`TOOL_NAME` and `WIDGET_KEY` are preserved verbatim** — renaming breaks session-history replay and persisted UI state
+- **`TOOL_NAME`, `STATE_ENTRY_TYPE` and `WIDGET_KEY` are preserved verbatim** — renaming breaks session-history replay and persisted UI state
 - **Delete is a tombstone** (`status: "deleted"`, terminal) — preserves ids so historic `blockedBy` references still resolve
-- **NO disk persistence** — state derives entirely from the session branch via the `details` envelope
+- **NO disk persistence** — state derives entirely from the session branch via the `details` envelope: `todo.ts` `execute()` also appends it as a `rpiv-todo-state` custom entry (`pi.appendEntry`) for every state change (`changesState(op)`), because a call made through another tool (`ctx.executeTool`, e.g. codemode) never lands as a standalone `toolResult` — Pi's codemode persists its `store()` the same way
 - **Mutation goes through `store.ts`** — reducer is pure; only `commitState` / `replaceState` / `evictSession` / `__resetState` write the session-slot Map (all keyed by sid); `setActiveRenderSession` / `clearActiveRenderSession` move the foreground pointer (a distinct concept, not a task-state writer)
 - **`session_compact`/`session_tree` share one extracted `replayAndRefresh` handler** (`index.ts`) — swallows ONLY the known stale-ctx error (`isStaleCtxError`: auto-compaction races session disposal); other errors are real replay bugs and propagate; the overlay refresh is sid-gated to the foreground
 - **Overlay teardown is try/finally** — `session_shutdown` always evicts the slot; the foreground's own shutdown (or an unknown/stale sid `""`, treated as foreground) then runs `todoOverlay?.dispose()` with `todoOverlay = undefined` + `clearActiveRenderSession()` in `finally` — `dispose()` can throw on a stale ui proxy, and a surviving pointer would target the already-evicted slot (overlay silently renders empty)
@@ -98,7 +99,7 @@ pi.on("session_start", async (_e, ctx) => {
 <important if="you are adding a new todo action">
 ## Adding an Action
 1. Add the literal to the `TaskAction` union (`tool/types.ts`) and to the action `StringEnum` in the tool params schema (`tool/`)
-2. Add the reducer branch in `state/state-reducer.ts` — extend the `Op` union and return `errorResult` on failures (errors are values, never throws)
+2. Add the reducer branch in `state/state-reducer.ts` — extend the `Op` union and return `errorResult` on failures (errors are values, never throws); decide in `changesState` (compiler-enforced exhaustive over `Op`) whether the new op persists a replay snapshot
 3. Extend the response-envelope's `formatContent` switch (`tool/response-envelope.ts`) — compiler-enforced exhaustive over `Op`; it owns content/details formatting
 4. Hook renderers (action glyph, status glyph, status color) in the view layer; if status-changing, extend the `VALID_TRANSITIONS` table in `state/invariants.ts` + the overlay's status-glyph and line formatter
 5. Update the `/todos` command if a new section is needed
